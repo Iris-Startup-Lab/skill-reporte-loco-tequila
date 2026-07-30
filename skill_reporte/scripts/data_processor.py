@@ -130,11 +130,30 @@ class LocoDataProcessor:
     # ------------------------------------------------------------------
 
     def _load_data(self):
-        actuals_path  = os.path.join(self.datos_dir, "loco_actuals_enriquecido.csv")
-        plan_path     = os.path.join(self.datos_dir, "loco_actual_vs_plan_semanal.csv")
+        actuals_path = os.path.join(self.datos_dir, "loco_actuals_enriquecido.csv")
+        plan_path    = os.path.join(self.datos_dir, "loco_actual_vs_plan_semanal.csv")
+
+        # Fallback inteligente si no existe con el nombre exacto
+        if not os.path.exists(actuals_path) and os.path.isdir(self.datos_dir):
+            csvs = [os.path.join(self.datos_dir, f) for f in os.listdir(self.datos_dir) if f.lower().endswith(".csv")]
+            for c in csvs:
+                c_name = os.path.basename(c).lower()
+                if "actual" in c_name or "venta" in c_name or "enriquecido" in c_name:
+                    actuals_path = c
+                    break
+            else:
+                if csvs: actuals_path = csvs[0]
+
+        if not os.path.exists(plan_path) and os.path.isdir(self.datos_dir):
+            csvs = [os.path.join(self.datos_dir, f) for f in os.listdir(self.datos_dir) if f.lower().endswith(".csv")]
+            for c in csvs:
+                c_name = os.path.basename(c).lower()
+                if "plan" in c_name or "presupuesto" in c_name or "vs_plan" in c_name:
+                    plan_path = c
+                    break
 
         self.df_actuals = _load_csv(actuals_path)
-        self.df_plan    = _load_csv(plan_path)
+        self.df_plan    = _load_csv(plan_path) if os.path.exists(plan_path) else pd.DataFrame()
 
     def _enrich(self):
         df = self.df_actuals.copy()

@@ -32,9 +32,10 @@ La skill cumple estrictamente con el estándar universal de **Agent Skills** (de
 Cuando el usuario activa la Skill o interactúa con el agente sin adjuntar datos:
 
 1. **Presentación Automática**: El agente saluda y explica los entregables (PDF, XLSX, Dashboard HTML).
-2. **Validación de Archivos**: Verifica si existen archivos CSV de entrada (`loco_actuals_enriquecido.csv`, `loco_plan.csv`).
-3. **Manejo Faltante / Simulación**: Si el usuario no ha subido archivos, el agente ofrece amablemente procesar los **datos de prueba y simulación** en `data_for_test_and_simulation/` (Semana 30, 2026).
-4. **Guía de Opciones**: Ofrece menú interactivo para reporte completo, entregables individuales, comparativos personalizados (WoW, MoM, YoY) o inclusión de contexto de mercado tequilero (CRT, Agave, NOM-006).
+2. **Detección Inteligente de CSVs**: Escanea automáticamente los archivos CSV de la carpeta por palabras clave (`ventas`, `actuals`, `plan`, `presupuesto`) o por la presencia de columnas mínimas.
+3. **Muestra de Dataset de Ejemplo**: Si el usuario no conoce la estructura o no tiene los nombres exactos, el agente le enseña una muestra visual del esquema de columnas requerido (Ventas y Plan).
+4. **Manejo Faltante / Simulación**: Si el usuario no ha subido archivos, el agente ofrece amablemente procesar los **datos de prueba y simulación** en `data_for_test_and_simulation/` (Semana 30, 2026).
+5. **Guía de Opciones**: Ofrece menú interactivo para reporte completo, entregables individuales, comparativos personalizados (WoW, MoM, YoY) o inclusión de contexto de mercado tequilero (CRT, Agave, NOM-006).
 
 ---
 
@@ -46,7 +47,7 @@ Esta skill está optimizada para ser probada y ejecutada localmente a través de
 
 - **Modelos soportados**:
   - **DeepSeek V4 Pro / DeepSeek V3 / R1**
-  - **Kimi 3 / K1.5**
+  - **Kimi 3 / K2.7**
 - **Operación**: OpenCode detecta `SKILL.md` y `AGENTS.md` para invocar comandos de Python mediante la consola interactiva en el ambiente Conda.
 
 ### 2. Antigravity (Google DeepMind Agentic IDE)
@@ -59,10 +60,11 @@ Esta skill está optimizada para ser probada y ejecutada localmente a través de
 ### 3. Claude Desktop y Claude Code
 
 - **Modelos soportados**:
-  - **Claude 3.7 Sonnet / Claude 3.5 Sonnet** (Recomendados)
-  - **Claude 3.5 Opus**
+  - **Claude Sonnet** (Recomendados)
+  - **Claude Opus**
 - **Operación en Claude Desktop**: Requiere servidor MCP Filesystem o Terminal para interactuar con los archivos locales.
 - **Operación en Claude Code (CLI)**: Se ejecuta directamente desde la línea de comandos ejecutando instrucciones naturales vinculadas a `scripts/generate_report.py`.
+- **Operación en Claude Desktop empresarial**: Empaquetar la carpeta de la skill a un zip y subir a la plataforma.
 
 ---
 

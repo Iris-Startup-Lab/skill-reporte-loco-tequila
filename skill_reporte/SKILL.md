@@ -32,24 +32,38 @@ Al activarse esta Skill, el agente **DEBE** seguir este protocolo de interacció
 ### Paso 1: Presentación Inicial
 
 El agente se presenta explicando claramente su función y los entregables que genera:
-> *"¡Hola! Soy tu asistente de analítica financiera y comercial para **Loco Tequila**. Estoy listo para procesar tus datos de ventas y margen para generar automáticamente tus reportes semanales en 3 formatos ejecutivos: **PDF (~30 págs)**, **Excel XLSX (6-8 hojas analíticas)** y **Dashboard HTML Interactivo**."*
 
-### Paso 2: Verificación de Datos de Entrada
+### Paso 2: Detección Inteligente de CSVs y Ejemplo de Dataset
 
-El agente comprueba si el usuario proporcionó archivos CSV de datos transaccionales o presupuestales:
+El agente comprueba automáticamente si existen archivos CSV en el directorio actual o en la ruta especificada:
 
-- **Archivos requeridos para datos propios**:
-  - `loco_actuals_enriquecido.csv` (Ventas reales por fecha, SKU, canal, cliente, estado, venta sin IVA, botellas, margen).
-  - `loco_plan.csv` o `loco_actual_vs_plan_semanal.csv` (Presupuesto/Plan).
+1. **Detección por Nombre/Columnas**: Busca archivos que contengan ventas reales (`actuals`, `ventas`, `enriquecido`) o presupuesto (`plan`, `presupuesto`). No exige un nombre estricto.
+2. **Muestra del Dataset de Ejemplo**: Si el usuario no está seguro del formato o nombre de su archivo, el agente le muestra una muestra del dataset esperado:
 
-### Paso 3: Manejo de Archivos Faltantes (Datos de Simulación)
+#### Ejemplo de Dataset de Ventas Reales (CSV)
 
-Si el usuario **NO** ha adjuntado archivos nuevos o no ha especificado una carpeta:
-> *"No he detectado archivos CSV nuevos adjuntos. No te preocupes: puedo generar los reportes usando los datos de prueba y simulación incluidos en `data_for_test_and_simulation/` (Semana 30 de 2026).*
+```csv
+semana de venta,fecha de venta,SKU/producto,cliente,canal_reporte,region_o_estado,venta_sin_impuestos,botellas,margen_pesos,anio
+2026-W30,2026-07-20,Loco Blanco,La Europea,On-Premise,Jalisco,45000,30,22500,2026
+2026-W30,2026-07-21,Puro Corazon,Bodegas Alianza,Retail,CDMX,62000,25,31000,2026
+```
+
+#### Ejemplo de Dataset de Presupuesto/Plan (CSV)
+
+```csv
+semana de venta,SKU/producto,canal_reporte,plan_venta_sin_impuestos,plan_botellas,anio
+2026-W30,Loco Blanco,On-Premise,50000,35,2026
+```
+
+### Paso 3: Manejo de Archivos Faltantes o Dudas
+
+Si no se detectan CSVs nuevos o el usuario no los tiene listos:
+> *"No he detectado un CSV con el formato exacto. Puedo:*
 >
-> *¿Te gustaría que use los **datos de prueba (Semana 30, 2026)** o deseas adjuntar/especificar una ruta con tus archivos de ventas propios?"*
-
-### Paso 4: Guía de Opciones al Usuario
+> 1. *Usar un CSV de tu carpeta que contenga las columnas de ventas.*
+> 2. *Procesar los **datos de simulación incluidos** (`data_for_test_and_simulation/` - Semana 30 de 2026).*
+>
+> *¿Qué prefieres utilizar?"*
 
 El agente presenta opciones claras para orientar al usuario sobre qué hacer a continuación:
 
