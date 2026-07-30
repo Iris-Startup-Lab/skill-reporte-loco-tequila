@@ -1,0 +1,25 @@
+# Archivos de datos y scripts
+*.csv
+*.pdf
+*.docx
+*.doc
+*.html
+*.pptx
+*.ppt
+*.xls
+*.xlsx
+*.xlsxm
+*.xlsb
+*.env
+.env
+
+# Archivos de configuración
+*.ini
+*.cfg
+*.conf
+*.config
+*.yaml
+*.yml
+
+__pycache__/
+output/

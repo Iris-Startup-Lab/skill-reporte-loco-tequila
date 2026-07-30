@@ -1,0 +1,10 @@
+# requirements.txt — Skill Reporte Loco Tequila
+# Instalar con: pip install -r requirements.txt
+
+pandas>=1.5.0
+reportlab>=4.0.0
+matplotlib>=3.6.0
+openpyxl>=3.1.0
+chardet>=5.0.0
+svglib>=1.5.0       # Para renderizar el logo SVG en el PDF
+numpy>=1.23.0
