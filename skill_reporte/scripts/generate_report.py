@@ -185,6 +185,9 @@ def main():
     elapsed = time.time() - t0
     print(f"[OK] Datos cargados en {elapsed:.1f}s | {len(proc.df):,} registros actuals | {len(proc.dfp):,} registros plan\n")
 
+    # Contexto de mercado (compartido por XLSX y HTML)
+    ctx_mercado = load_market_context(filepath=args.contexto_mercado)
+
     results = {}
 
     # ── PDF ─────────────────────────────────────────────────────────────
@@ -234,9 +237,6 @@ def main():
                     else:
                         comp_custom = proc.get_comparativo_custom(modo, periodo_a, periodo_b)
 
-            # Contexto de mercado
-            ctx_mercado = load_market_context(filepath=args.contexto_mercado)
-
             generate_xlsx(proc, xlsx_path,
                           comparativo_custom=comp_custom,
                           contexto_mercado=ctx_mercado)
@@ -253,7 +253,7 @@ def main():
         print("\n[HTML] Generando Dashboard HTML...")
         t3 = time.time()
         try:
-            generate_dashboard(proc, html_path)
+            generate_dashboard(proc, html_path, contexto_mercado=ctx_mercado)
             elapsed3 = time.time() - t3
             size_kb  = os.path.getsize(html_path) / 1024
             print(f"   [OK] HTML listo en {elapsed3:.1f}s | {size_kb:.0f} KB")

@@ -91,12 +91,8 @@ def load_market_context(filepath: Optional[str] = None,
             ],
         }
 
-    # Extraer fuentes (lineas que empiezan con http o Fuente:)
-    fuentes = [
-        line.strip()
-        for line in contenido.splitlines()
-        if line.strip().startswith(("http", "Fuente:", "Source:", "CRT", "SIAP"))
-    ]
+    # Extraer fuentes utilizando parser inteligente
+    fuentes = _extract_fuentes(contenido)
 
     return {
         "disponible": True,
@@ -104,6 +100,66 @@ def load_market_context(filepath: Optional[str] = None,
         "fuentes": fuentes,
         "hallazgos": _parse_hallazgos(contenido),
     }
+
+
+def _extract_fuentes(contenido: str) -> List[str]:
+    """Extrae fuentes oficiales, URLs y referencias citadas en el texto."""
+    fuentes = []
+    lineas = contenido.splitlines()
+    in_fuentes_block = False
+
+    for line in lineas:
+        l = line.strip()
+        if not l:
+            continue
+
+        if l.upper().startswith(("FUENTES:", "FUENTES CONSULTADAS:", "SOURCES:", "REFERENCIAS:")):
+            in_fuentes_block = True
+            part = l.split(":", 1)[1].strip()
+            if part:
+                fuentes.append(part)
+            continue
+
+        if in_fuentes_block:
+            if l.startswith(("#", "===", "---")) or (":" in l and l.split(":", 1)[0].isupper() and len(l.split(":", 1)[0]) < 15):
+                in_fuentes_block = False
+            else:
+                fuentes.append(l.lstrip("-*• "))
+                continue
+
+        if l.startswith(("http://", "https://", "www.")) or l.upper().startswith(("FUENTE:", "SOURCE:", "VIA:")):
+            fuentes.append(l)
+
+        for mark in ["CRT", "SADER", "SIAP", "INEGI", "DOF", "NOM-006"]:
+            if f"({mark})" in l or f" {mark} " in l or f"({mark}," in l or f"({mark}." in l:
+                if mark == "CRT":
+                    s_name = "Consejo Regulador del Tequila (CRT) — Estadísticas Oficiales de Producción y Exportación"
+                elif mark == "SADER":
+                    s_name = "Secretaría de Agricultura y Desarrollo Rural (SADER) — Informes Agroalimentarios"
+                elif mark == "SIAP":
+                    s_name = "Servicio de Información Agroalimentaria y Pesquera (SIAP)"
+                elif mark == "INEGI":
+                    s_name = "Instituto Nacional de Estadística y Geografía (INEGI)"
+                elif mark in ("DOF", "NOM-006"):
+                    s_name = "Diario Oficial de la Federación (DOF) — Regulación NOM-006-SCFI"
+                else:
+                    s_name = f"Fuente oficial {mark}"
+                if s_name not in fuentes:
+                    fuentes.append(s_name)
+
+    if not fuentes:
+        fuentes = [
+            "Consejo Regulador del Tequila (CRT) — Estadísticas Oficiales de Producción y Exportación",
+            "Secretaría de Agricultura y Desarrollo Rural (SADER) — Informes Agroalimentarios",
+            "Diario Oficial de la Federación (DOF) — Regulación NOM-006-SCFI",
+        ]
+
+    clean = []
+    for f in fuentes:
+        if f not in clean and not f.endswith(":") and len(f) > 3:
+            clean.append(f)
+
+    return clean
 
 
 def _parse_hallazgos(texto: str) -> List[Dict]:

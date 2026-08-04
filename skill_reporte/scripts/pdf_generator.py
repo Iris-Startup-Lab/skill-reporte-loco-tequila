@@ -124,6 +124,196 @@ def make_donut_chart(product_df: pd.DataFrame, total: float, size_inches=(3.5, 3
 
 
 # ---------------------------------------------------------------------------
+# Gráfica: Treemap de Voronoi (power diagram con áreas proporcionales)
+# ---------------------------------------------------------------------------
+# Se usa en lugar de la dona cuando hay más de 3 productos: la dona pierde
+# legibilidad con muchas categorías, mientras que el treemap de Voronoi asigna
+# a cada producto un área proporcional a su venta. El diagrama se calcula como
+# un "power diagram" (Voronoi con pesos): el bisector entre dos sitios es una
+# recta, así que cada celda es la intersección de semiplanos recortada contra
+# un contorno circular. Los pesos se ajustan iterativamente (relajación tipo
+# Balzer/Lloyd) hasta que el área de cada celda coincide con su objetivo.
+
+def _clip_halfplane(poly, a, b, c):
+    """Recorta el polígono conservando los puntos con a*x + b*y <= c."""
+    if not poly:
+        return poly
+    res = []
+    n = len(poly)
+    for i in range(n):
+        cur = poly[i]
+        nxt = poly[(i + 1) % n]
+        cur_in = (a * cur[0] + b * cur[1]) <= c + 1e-12
+        nxt_in = (a * nxt[0] + b * nxt[1]) <= c + 1e-12
+        if cur_in:
+            res.append(cur)
+        if cur_in != nxt_in:
+            dx = nxt[0] - cur[0]
+            dy = nxt[1] - cur[1]
+            denom = a * dx + b * dy
+            if abs(denom) > 1e-15:
+                t = (c - (a * cur[0] + b * cur[1])) / denom
+                res.append((cur[0] + t * dx, cur[1] + t * dy))
+    return res
+
+
+def _poly_area(poly):
+    if len(poly) < 3:
+        return 0.0
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) * 0.5
+
+
+def _poly_centroid(poly):
+    n = len(poly)
+    if n == 0:
+        return (0.0, 0.0)
+    if n < 3:
+        return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
+    A = cx = cy = 0.0
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        cross = x1 * y2 - x2 * y1
+        A += cross
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+    A *= 0.5
+    if abs(A) < 1e-15:
+        return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
+    return (cx / (6 * A), cy / (6 * A))
+
+
+def _power_cells(sites, weights, boundary):
+    """Celdas del power diagram: intersección de semiplanos bisectores."""
+    cells = []
+    n = len(sites)
+    for i in range(n):
+        poly = list(boundary)
+        xi, yi = sites[i]
+        wi = weights[i]
+        for j in range(n):
+            if j == i:
+                continue
+            xj, yj = sites[j]
+            wj = weights[j]
+            a = 2 * (xj - xi)
+            b = 2 * (yj - yi)
+            c = (xj * xj + yj * yj - wj) - (xi * xi + yi * yi - wi)
+            poly = _clip_halfplane(poly, a, b, c)
+            if not poly:
+                break
+        cells.append(poly)
+    return cells
+
+
+def _circle_boundary(cx, cy, r, n=96):
+    return [(cx + r * math.cos(2 * math.pi * k / n),
+             cy + r * math.sin(2 * math.pi * k / n)) for k in range(n)]
+
+
+def _voronoi_treemap_cells(values, iters=200, adapt=0.5):
+    """Devuelve las celdas del treemap de Voronoi con áreas ~ proporcionales."""
+    n = len(values)
+    total = sum(values) or 1.0
+    boundary = _circle_boundary(0.0, 0.0, 1.0)
+    barea = _poly_area(boundary)
+    target = [v / total * barea for v in values]
+
+    # Semillas repartidas de forma determinista (ángulo áureo)
+    ga = math.pi * (3 - math.sqrt(5))
+    sites = [(0.55 * math.sqrt((i + 0.5) / n) * math.cos(i * ga),
+              0.55 * math.sqrt((i + 0.5) / n) * math.sin(i * ga)) for i in range(n)]
+    weights = [0.0] * n
+
+    cells = _power_cells(sites, weights, boundary)
+    for _ in range(iters):
+        # Lloyd: mover cada sitio al centroide de su celda
+        for i in range(n):
+            if _poly_area(cells[i]) > 1e-9:
+                cells_c = _poly_centroid(cells[i])
+                sites[i] = cells_c
+        cells = _power_cells(sites, weights, boundary)
+        areas = [_poly_area(c) for c in cells]
+        # Ajustar pesos hacia el área objetivo
+        for i in range(n):
+            weights[i] += (target[i] - areas[i]) * adapt
+        wmin = min(weights)
+        weights = [w - wmin for w in weights]
+        # Clamp: cada sitio debe permanecer dentro de su propia celda
+        for i in range(n):
+            dmin = min(((sites[i][0] - sites[j][0]) ** 2 + (sites[i][1] - sites[j][1]) ** 2)
+                       for j in range(n) if j != i)
+            weights[i] = min(weights[i], dmin)
+        cells = _power_cells(sites, weights, boundary)
+    return cells
+
+
+def make_voronoi_chart(product_df, total: float, size_inches=(3.0, 2.7),
+                       show_total_above: bool = True) -> bytes:
+    """
+    Treemap de Voronoi de participación por producto (áreas proporcionales).
+    Retorna PNG bytes. Si show_total_above, el total se rotula arriba del gráfico.
+    """
+    labels, values, clrs = [], [], []
+    for prod in PRODUCT_ORDER:
+        v = float(product_df.get(prod, 0))
+        if v > 0:
+            labels.append(PRODUCT_DISPLAY_NAMES.get(prod, prod))
+            values.append(v)
+            clrs.append(hex_to_rgb(PRODUCT_COLORS[prod]))
+
+    fig, ax = plt.subplots(figsize=size_inches)
+    fig.patch.set_alpha(0)
+
+    if values:
+        cells = _voronoi_treemap_cells(values)
+        tot_area = sum(_poly_area(c) for c in cells) or 1.0
+        for label, val, rgb, cell in zip(labels, values, clrs, cells):
+            if len(cell) < 3:
+                continue
+            ax.add_patch(mpatches.Polygon(cell, closed=True, facecolor=rgb,
+                                          edgecolor="white", linewidth=1.6))
+            cx, cy = _poly_centroid(cell)
+            frac = _poly_area(cell) / tot_area
+            # Color de texto según luminancia del fondo (contraste)
+            lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+            txtcolor = "white" if lum < 0.55 else "#3A3A3A"
+            if frac >= 0.05:
+                ax.text(cx, cy + 0.07, label, ha="center", va="center",
+                        fontsize=7.5, fontweight="bold", color=txtcolor)
+                ax.text(cx, cy - 0.09, f"{frac * 100:.0f}%", ha="center",
+                        va="center", fontsize=8.5, fontweight="bold", color=txtcolor)
+            else:
+                ax.text(cx, cy, f"{frac * 100:.0f}%", ha="center", va="center",
+                        fontsize=6.5, fontweight="bold", color=txtcolor)
+    else:
+        ax.text(0, 0, "Sin datos", ha="center", va="center", fontsize=9,
+                color=hex_to_rgb(SECTION_SUBTITLE))
+
+    ax.set_xlim(-1.05, 1.05)
+    ax.set_ylim(-1.08, 1.22 if show_total_above else 1.08)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    if show_total_above:
+        ax.text(0, 1.15, fmt_currency(total), ha="center", va="center",
+                fontsize=11, fontweight="bold", color=hex_to_rgb(SECTION_TITLE))
+        ax.text(0, 1.03, "Total de ventas", ha="center", va="center",
+                fontsize=7, color=hex_to_rgb(SECTION_SUBTITLE))
+    plt.tight_layout(pad=0.1)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor="none", transparent=True)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Gráfica: Barras apiladas + línea (Storytelling with Data: SIN pie/dona)
 # ---------------------------------------------------------------------------
 
@@ -158,12 +348,9 @@ def make_stacked_bar_line(
             continue
         vals = piv_df[cat].values.astype(float) / 1000  # miles
         c    = hex_to_rgb(color_map.get(cat, "#AAAAAA"))
-        ax.bar(x, vals, bottom=bottom / 1000 if bottom.sum() == 0 else bottom,
-               color=c, label=cat_display.get(cat, cat), width=0.65)
-        if bottom.sum() == 0:
-            bottom = vals * 1000
-        else:
-            bottom += vals * 1000
+        ax.bar(x, vals, bottom=bottom, color=c,
+               label=cat_display.get(cat, cat), width=0.65)
+        bottom += vals
 
     # Línea roja
     if line_values:
@@ -381,20 +568,34 @@ class LocoReportePDF:
         c.setTitle(f"Reporte Loco Tequila — Semana {self.semana:02d} {self.anio}")
         c.setAuthor("Loco Tequila — Dirección de Finanzas")
 
-        # Página 1: Resumen Anual
+        # Página 1: Resumen Anual (incluye el Voronoi/dona anual)
         self._page_num += 1
         self._draw_page_resumen(c, mode="anual")
         c.showPage()
 
-        # Página 2: Resumen Semanal
+        # Detalle Canal → Cliente → Producto ANUAL (justo tras el resumen anual)
+        self._draw_pages_canal_cliente_producto(c, mode="anual", top_n=10)
+
+        # Página siguiente: Resumen Semanal (incluye el Voronoi/dona semanal)
         self._page_num += 1
         self._draw_page_resumen(c, mode="semanal")
         c.showPage()
 
-        # Página 3: Histórico mensual
+        # Detalle Canal → Cliente → Producto SEMANAL (justo tras el resumen semanal)
+        self._draw_pages_canal_cliente_producto(c, mode="semanal", top_n=10)
+
+        # Página 3: Semáforo de Comparativos (WoW / YoY / YTD / Rolling 52)
+        self._page_num += 1
+        self._draw_page_comparativos(c)
+        c.showPage()
+
+        # Página 4: Histórico mensual (gráfica)
         self._page_num += 1
         self._draw_page_historico(c)
         c.showPage()
+
+        # Página: Histórico mensual — Tabla por Producto (tras la gráfica mensual)
+        self._draw_page_historico_tabla(c)
 
         # Páginas 4-5: Totales por Producto
         for mode in ["semanal", "anual"]:
@@ -595,14 +796,20 @@ class LocoReportePDF:
         highlight_cols: list = None,    # índices de columnas a highlight
         neg_cells: list = None,         # list of (row, col) para texto rojo
         font_size: int = 7,
+        repeat_rows: int = 0,           # nº de filas de encabezado a repetir al partir
+        label_col: int = 0,             # columna de categoría (alineación especial)
+        label_align: str = "LEFT",      # alineación de la columna de categoría
+        sep_before_cols: list = None,   # columnas con línea vertical de separación
     ) -> Table:
         """Construye una Table de ReportLab con el estilo del reporte."""
         style_cmds = [
             ("FONTNAME",  (0, 0), (-1, 0),  "Helvetica-Bold"),
             ("FONTSIZE",  (0, 0), (-1, -1), font_size),
             ("FONTNAME",  (0, 1), (-1, -1), "Helvetica"),
-            ("ALIGN",     (0, 0), (0, -1),  "LEFT"),
-            ("ALIGN",     (1, 0), (-1, -1), "RIGHT"),
+            # Por defecto todo a la derecha; la columna de categoría se alinea
+            # según label_align (permite ponerla al centro en las comparativas).
+            ("ALIGN",     (0, 0), (-1, -1), "RIGHT"),
+            ("ALIGN",     (label_col, 0), (label_col, -1), label_align),
             ("VALIGN",    (0, 0), (-1, -1), "MIDDLE"),
             ("GRID",      (0, 0), (-1, -1), 0.25, colors.HexColor(RULE_LINE)),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9F9F9")]),
@@ -614,6 +821,15 @@ class LocoReportePDF:
             ("BACKGROUND", (0, 0), (-1, 0), MAROON_RL),
             ("TEXTCOLOR",  (0, 0), (-1, 0), WHITE_RL),
         ]
+
+        # Categoría al centro (label_col != 0): resaltar en negrita el nombre
+        if label_col != 0:
+            style_cmds.append(("FONTNAME", (label_col, 1), (label_col, -1), "Helvetica-Bold"))
+
+        # Separadores verticales de grupo (real | categoría | variaciones)
+        if sep_before_cols:
+            for ci in sep_before_cols:
+                style_cmds.append(("LINEBEFORE", (ci, 0), (ci, -1), 0.8, MAROON_RL))
 
         # Filas resaltadas (Total, Ventas Netas)
         if highlight_rows:
@@ -632,7 +848,7 @@ class LocoReportePDF:
             for (ri, ci) in neg_cells:
                 style_cmds.append(("TEXTCOLOR", (ci, ri), (ci, ri), NEG_RL))
 
-        tbl = Table(data, colWidths=col_widths)
+        tbl = Table(data, colWidths=col_widths, repeatRows=repeat_rows)
         tbl.setStyle(TableStyle(style_cmds))
         return tbl
 
@@ -650,16 +866,25 @@ class LocoReportePDF:
                                      f"Por Producto · Por Canal — {mode.capitalize()}",
                                      y)
 
-        # --- Área izquierda: Dona ---
+        # --- Área izquierda: Dona (≤3 productos) o Treemap de Voronoi (>3) ---
         matriz = self.proc.get_matriz_canal_producto(mode=mode)
         total_row = matriz.loc["Total"] if "Total" in matriz.index else pd.Series(dtype=float)
         total_ventas = float(total_row.get("Total", 0))
         product_totals = {p: float(total_row.get(p, 0)) for p in PRODUCT_ORDER}
 
+        # Con 3 o menos productos la dona es clara (total al centro); con más,
+        # el treemap de Voronoi es más legible (total arriba del gráfico).
+        n_productos = sum(1 for p in PRODUCT_ORDER if product_totals.get(p, 0) > 0)
+
         dona_w_pt = 190
         dona_h_pt = 160
-        dona_png = make_donut_chart(product_totals, total_ventas,
-                                    size_inches=(3.0, 2.5))
+        if n_productos <= 3:
+            dona_png = make_donut_chart(product_totals, total_ventas,
+                                        size_inches=(3.0, 2.5))
+        else:
+            dona_png = make_voronoi_chart(product_totals, total_ventas,
+                                          size_inches=(3.0, 2.7),
+                                          show_total_above=True)
         dona_y = y - dona_h_pt
         self._embed_png(c, dona_png, self.MARGIN, dona_y, dona_w_pt, dona_h_pt)
 
@@ -752,7 +977,348 @@ class LocoReportePDF:
                 tbl_det.drawOn(c, self.MARGIN, det_y - th_det)
 
     # ------------------------------------------------------------------
-    # Página 3: Histórico mensual
+    # Páginas: Detalle por Canal → Cliente → Producto (paginado)
+    # ------------------------------------------------------------------
+
+    # Secciones de canal a desglosar (título, canal_reporte, sub_canal).
+    # Off Trade se abre en Tradicional / Moderno + un total combinado; los demás
+    # canales se muestran completos.
+    _CANAL_SECCIONES = [
+        ("Off Trade — Canal Tradicional",           "Off Trade",                       "Tradicional"),
+        ("Off Trade — Canal Moderno",               "Off Trade",                       "Moderno"),
+        ("Total Off Trade (Tradicional + Moderno)", "Off Trade",                       None),
+        ("Centros de Consumo (On Trade)",           "Centros de Consumo (On Trade)",   None),
+        ("Venta Directa",                           "Venta Directa",                   None),
+        ("Familia y Amigos",                        "Familia y Amigos",                None),
+    ]
+
+    def _draw_pages_canal_cliente_producto(self, c, mode: str = "anual",
+                                           top_n: int = 10):
+        """
+        Renderiza (con paginación automática) el desglose Canal → Cliente →
+        Producto. Cada sección de canal es una tabla clientes × productos con
+        columna Total (con %) y filas de 'Ventas Netas' y 'Participación %'.
+        Gestiona sus propias páginas (header/footer + showPage al final).
+        """
+        anio = self.anio
+        sem = self.semana
+        period_lbl = "Anual (YTD)" if mode == "anual" else f"Semanal · S{sem:02d}"
+        subt = f"Canal · Cliente · Producto — {period_lbl}"
+
+        prod_disp = [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER]
+        ncols = 1 + len(PRODUCT_ORDER) + 1
+        cw = self.CONTENT_W
+        col_widths = ([cw * 0.20] +
+                      [cw * (0.66 / len(PRODUCT_ORDER))] * len(PRODUCT_ORDER) +
+                      [cw * 0.14])
+
+        min_bottom = FOOTER_HEIGHT_PT + self.MARGIN
+
+        def _start_page():
+            self._page_num += 1
+            self._draw_header(c, subtitulo=subt)
+            self._draw_footer(c)
+            yy = self._body_top()
+            yy = self._draw_section_title(
+                c, "Ventas por Canal, Cliente y Producto",
+                f"Detalle canal → cliente → producto · {period_lbl} · $MXN sin IVA", yy)
+            return yy - 6
+
+        y = _start_page()
+
+        for title, canal, sub in self._CANAL_SECCIONES:
+            data = self.proc.get_cliente_producto_por_canal(
+                canal, sub_canal=sub, mode=mode, top_n=top_n)
+            if not data:
+                continue
+
+            piv = data["pivot"]
+            total_sec = data["total"] or 1.0
+            prod_tot = data["prod_tot"]
+
+            # Encabezado + filas de clientes
+            header = ["Cliente"] + prod_disp + ["Total"]
+            rows = [header]
+            for cliente, prow in piv.iterrows():
+                tv = float(prow["Total"])
+                pct = tv / total_sec * 100 if total_sec else 0
+                fila = [str(cliente)[:24]]
+                fila += [fmt_currency(float(prow[p])) for p in PRODUCT_ORDER]
+                fila.append(f"{fmt_currency(tv)} ({pct:.0f}%)")
+                rows.append(fila)
+
+            # Fila Ventas Netas
+            rows.append([f"Ventas Netas {anio}"] +
+                        [fmt_currency(prod_tot[p]) for p in PRODUCT_ORDER] +
+                        [fmt_currency(total_sec)])
+            # Fila Participación %
+            rows.append(["Participación %"] +
+                        [f"{(prod_tot[p] / total_sec * 100 if total_sec else 0):.0f}%"
+                         for p in PRODUCT_ORDER] +
+                        ["100%"])
+
+            n = len(rows)
+            tbl = self._build_rl_table(
+                rows, col_widths,
+                highlight_rows=[n - 2, n - 1],
+                highlight_cols=[ncols - 1],
+                font_size=6,
+                repeat_rows=1)  # repite encabezado si la tabla se parte
+
+            # Título de la sección: necesita espacio para el título + al menos
+            # el encabezado y unas filas; si no, salto de página.
+            tbl.wrapOn(c, cw, 3000)
+            if y - (14 + 60) < min_bottom:
+                c.showPage()
+                y = _start_page()
+
+            c.setFillColor(MAROON_RL)
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(self.MARGIN, y, title)
+            y -= 14
+
+            # Dibuja la tabla partiéndola entre páginas para llenar el espacio
+            while tbl is not None:
+                avail = y - min_bottom
+                w_, h_ = tbl.wrap(cw, avail)
+                if h_ <= avail:
+                    tbl.drawOn(c, self.MARGIN, y - h_)
+                    y -= h_ + 12
+                    break
+                parts = tbl.split(cw, avail)
+                if not parts:
+                    # No cabe ni el encabezado: nueva página y reintenta
+                    c.showPage()
+                    y = _start_page()
+                    continue
+                first = parts[0]
+                fw, fh = first.wrap(cw, avail)
+                first.drawOn(c, self.MARGIN, y - fh)
+                tbl = parts[1] if len(parts) > 1 else None
+                c.showPage()
+                y = _start_page()
+
+        c.showPage()
+
+    # ------------------------------------------------------------------
+    # Página: Histórico mensual — Tabla por Producto (basada en la gráfica)
+    # ------------------------------------------------------------------
+
+    def _draw_page_historico_tabla(self, c):
+        """
+        Tabla con el mismo detalle de la gráfica de histórico mensual: meses en
+        filas × productos en columnas + Total. Va justo después de la gráfica
+        mensual. Usa las mismas etiquetas de mes que la gráfica. Se paginta si
+        hay muchos meses.
+        """
+        subt = "Histórico Mensual — Tabla por Producto"
+        hist = self.proc.get_historico_mensual()
+
+        prod_disp = [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER]
+        header = ["Mes"] + prod_disp + ["Total"]
+        ncols = len(header)
+
+        rows = [header]
+        for _, hrow in hist.iterrows():
+            fila = [str(hrow.get("label", ""))]
+            fila += [fmt_currency(float(hrow.get(p, 0))) for p in PRODUCT_ORDER]
+            fila.append(fmt_currency(float(hrow.get("Total", 0))))
+            rows.append(fila)
+
+        cw = self.CONTENT_W
+        col_widths = ([cw * 0.12] +
+                      [cw * (0.76 / len(PRODUCT_ORDER))] * len(PRODUCT_ORDER) +
+                      [cw * 0.12])
+        min_bottom = FOOTER_HEIGHT_PT + self.MARGIN
+
+        def _start_page():
+            self._page_num += 1
+            self._draw_header(c, subtitulo=subt)
+            self._draw_footer(c)
+            yy = self._body_top()
+            yy = self._draw_section_title(
+                c, "Histórico de Ventas Mensuales — Tabla por Producto",
+                "Ventas netas mensuales por producto · $MXN sin IVA", yy)
+            return yy - 6
+
+        y = _start_page()
+        tbl = self._build_rl_table(
+            rows, col_widths,
+            highlight_cols=[ncols - 1],
+            font_size=7,
+            repeat_rows=1)
+
+        while tbl is not None:
+            avail = y - min_bottom
+            w_, h_ = tbl.wrap(cw, avail)
+            if h_ <= avail:
+                tbl.drawOn(c, self.MARGIN, y - h_)
+                break
+            parts = tbl.split(cw, avail)
+            if not parts:
+                c.showPage()
+                y = _start_page()
+                continue
+            first = parts[0]
+            fw, fh = first.wrap(cw, avail)
+            first.drawOn(c, self.MARGIN, y - fh)
+            tbl = parts[1] if len(parts) > 1 else None
+            c.showPage()
+            y = _start_page()
+
+        c.showPage()
+
+    # ------------------------------------------------------------------
+    # Página 3: Semáforo de Comparativos (4 ventanas estándar)
+    # ------------------------------------------------------------------
+
+    def _draw_page_comparativos(self, c):
+        """Página dedicada a las 4 ventanas comparativas: WoW, YoY semanal, YTD vs LY, Rolling 52."""
+        self._draw_header(c, subtitulo="Comparativo de Periodos")
+        self._draw_footer(c)
+
+        y = self._body_top()
+        sem = self.proc.semana
+        anio = self.proc.anio
+        ly = anio - 1
+        r = self.proc.get_resumen_ejecutivo()
+
+        y = self._draw_section_title(
+            c, "Semáforo de Comparativos",
+            f"Semana {sem:02d} · {anio} — Ventas sin IVA | Ventanas: WoW · YoY Semanal · YTD vs LY · Rolling 52",
+            y)
+
+        # --- Datos de cada bloque ---
+        sem_ant = sem - 1 if sem > 1 else 52
+        sem_ant_anio = anio if sem > 1 else ly
+
+        bloques = [
+            {
+                "titulo": f"A — Semana a Semana (WoW)",
+                "sub": f"S{sem:02d}-{anio} vs S{sem_ant:02d}-{sem_ant_anio}",
+                "actual": r["actual"]["ventas_netas"],
+                "anterior": r["actual"]["ventas_netas"] - r["vs_semana_anterior"]["abs"],
+                "var_abs": r["vs_semana_anterior"]["abs"],
+                "var_pct": r["vs_semana_anterior"]["pct"],
+                "label_a": f"S{sem:02d}-{anio}",
+                "label_b": f"S{sem_ant:02d}-{sem_ant_anio}",
+                "extra": f"Botellas: {r['actual'].get('botellas', 0):,.0f}   Ticket: ${r['actual'].get('ticket_promedio', 0):,.2f}",
+            },
+            {
+                "titulo": f"B — Mismo Período Año Anterior (YoY Semanal)",
+                "sub": f"S{sem:02d}-{anio} vs S{sem:02d}-{ly}",
+                "actual": r["actual"]["ventas_netas"],
+                "anterior": r["actual"]["ventas_netas"] - r["vs_anio_anterior"]["abs"],
+                "var_abs": r["vs_anio_anterior"]["abs"],
+                "var_pct": r["vs_anio_anterior"]["pct"],
+                "label_a": f"S{sem:02d}-{anio}",
+                "label_b": f"S{sem:02d}-{ly}",
+                "extra": None,
+            },
+            {
+                "titulo": f"C — Acumulado del Año (YTD vs LY)",
+                "sub": f"YTD {anio} vs YTD {ly} (S01–S{sem:02d})",
+                "actual": r["ytd_actual"]["ventas_netas"],
+                "anterior": r["ytd_actual"]["ventas_netas"] - r["ytd_vs_ly"]["abs"],
+                "var_abs": r["ytd_vs_ly"]["abs"],
+                "var_pct": r["ytd_vs_ly"]["pct"],
+                "label_a": f"YTD {anio}",
+                "label_b": f"YTD {ly}",
+                "extra": None,
+            },
+        ]
+
+        # Rolling 52 (condicional)
+        rolling = self.proc.get_rolling_52()
+        if rolling:
+            bloques.append({
+                "titulo": f"D — Rolling 52 Semanas",
+                "sub": f"{rolling['semanas_incluidas']} sem con datos",
+                "actual": rolling["ventas_rolling"],
+                "anterior": rolling["ventas_rolling_ly"],
+                "var_abs": rolling["var_abs"],
+                "var_pct": rolling["var_pct"],
+                "label_a": rolling["label_a"],
+                "label_b": rolling["label_b"],
+                "extra": None,
+            })
+
+        # --- Dibujar cada bloque como tabla ---
+        bloque_h = 62  # altura fija por bloque
+        for bloque in bloques:
+            # Título del bloque
+            c.setFillColor(MAROON_RL)
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(self.MARGIN, y, bloque["titulo"])
+            c.setFillColor(GREY_RL)
+            c.setFont("Helvetica", 8)
+            c.drawString(self.MARGIN, y - 12, bloque["sub"])
+
+            # Tabla de valores
+            actual   = bloque["actual"]
+            anterior = bloque["anterior"]
+            var_abs  = bloque["var_abs"]
+            var_pct  = bloque["var_pct"]
+            tendencia = "▲" if var_abs >= 0 else "▼"
+            color_var = POS_VALUE if var_abs >= 0 else NEG_VALUE
+
+            # Lectura narrativa automática
+            if var_pct < -10:
+                lectura = "Atención: caída relevante. Revisar causa raíz."
+            elif var_pct < 0:
+                lectura = "Ligera baja. Monitorear."
+            elif var_pct < 5:
+                lectura = "Desempeño estable."
+            elif var_pct < 15:
+                lectura = "Crecimiento sólido — sostener estrategia."
+            else:
+                lectura = "Crecimiento fuerte — identificar driver."
+
+            header = [bloque["label_a"], bloque["label_b"],
+                      "Variación $", "Variación %", "Tend.", "Lectura"]
+            row1 = [
+                fmt_currency(actual),
+                fmt_currency(anterior),
+                fmt_currency(var_abs),
+                fmt_pct(var_pct),
+                tendencia,
+                lectura,
+            ]
+            rows = [header, row1]
+
+            cw = self.CONTENT_W
+            col_widths = [cw*0.17, cw*0.17, cw*0.14, cw*0.10, cw*0.06, cw*0.36]
+
+            neg_cells = []
+            if var_abs < 0:
+                neg_cells = [(1, 2), (1, 3)]
+
+            tbl = self._build_rl_table(rows, col_widths,
+                                       highlight_cols=[0],
+                                       neg_cells=neg_cells,
+                                       font_size=7)
+            tbl.wrapOn(c, cw, 60)
+            th = tbl._height
+            tbl.drawOn(c, self.MARGIN, y - 18 - th)
+
+            # Poner tendencia en color
+            c.setFillColor(rl_color(color_var))
+            c.setFont("Helvetica-Bold", 11)
+            # (la flecha de tendencia ya está en la tabla, no necesitamos redibujarlo)
+
+            if bloque["extra"]:
+                c.setFillColor(GREY_RL)
+                c.setFont("Helvetica-Oblique", 7)
+                c.drawString(self.MARGIN, y - 20 - th - 6, bloque["extra"])
+                y -= (th + 38)
+            else:
+                y -= (th + 30)
+
+            if y < FOOTER_HEIGHT_PT + 60:
+                break  # no cabe más en esta página
+
+    # ------------------------------------------------------------------
+    # Página 4: Histórico mensual
     # ------------------------------------------------------------------
 
     def _draw_page_historico(self, c):
@@ -893,11 +1459,14 @@ class LocoReportePDF:
         cats = PRODUCT_ORDER if group_by == "producto" else CANAL_ORDER
         disp = PRODUCT_DISPLAY_NAMES if group_by == "producto" else {k: k for k in CANAL_ORDER}
 
-        header = ["", "Año Ant.", "Plan", "Semana/Año Actual", "Var vs Plan $",
-                  "Var vs Plan %", "Var vs Ant. $", "Var vs Ant. %"]
+        # Diseño empresarial de tabla comparativa (8 columnas):
+        #   VALORES REALES a la izquierda | CATEGORÍA al centro | VARIACIONES a la derecha
+        header = ["Año Ant.", "Plan", "Semana/Año Actual", "",
+                  "Var vs Plan $", "Var vs Plan %", "Var vs Ant. $", "Var vs Ant. %"]
         rows   = [header]
         hi_rows = []
         neg_cells = []
+        CAT_COL = 3  # índice de la columna de categoría (centro)
 
         plan_df = proc.dfp
         p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] == ww)]
@@ -919,8 +1488,9 @@ class LocoReportePDF:
             total_var_plan += v_plan; total_var_ant += v_ant
 
             row_idx = ri + 1
-            r = [disp.get(cat, cat)[:20],
-                 fmt_currency(pv), fmt_currency(plv), fmt_currency(cv),
+            # reales (izq) | categoría (centro) | variaciones (der)
+            r = [fmt_currency(pv), fmt_currency(plv), fmt_currency(cv),
+                 disp.get(cat, cat)[:22],
                  fmt_currency(v_plan), fmt_pct(p_plan),
                  fmt_currency(v_ant),  fmt_pct(p_ant)]
             rows.append(r)
@@ -936,8 +1506,8 @@ class LocoReportePDF:
         tv_ant  = total_var_ant
         tp_ant  = (tv_ant  / total_prev * 100) if total_prev > 0 else 0
         tot_row_idx = len(rows)
-        rows.append(["Total",
-                     fmt_currency(total_prev), fmt_currency(total_plan), fmt_currency(total_cur),
+        rows.append([fmt_currency(total_prev), fmt_currency(total_plan), fmt_currency(total_cur),
+                     "Total",
                      fmt_currency(tv_plan), fmt_pct(tp_plan),
                      fmt_currency(tv_ant),  fmt_pct(tp_ant)])
         hi_rows.append(tot_row_idx)
@@ -945,17 +1515,21 @@ class LocoReportePDF:
         if tv_ant  < 0: neg_cells += [(tot_row_idx, 6), (tot_row_idx, 7)]
 
         cw = self.CONTENT_W
-        col_widths = [cw * 0.18, cw * 0.10, cw * 0.10, cw * 0.14,
-                      cw * 0.12, cw * 0.10, cw * 0.12, cw * 0.10]
+        # reales(3) | categoría(centro) | variaciones(4)
+        col_widths = [cw * 0.11, cw * 0.10, cw * 0.13, cw * 0.22,
+                      cw * 0.12, cw * 0.09, cw * 0.12, cw * 0.11]
         # Ajustar suma
         diff = cw - sum(col_widths)
         col_widths[-1] += diff
 
         tbl = self._build_rl_table(rows, col_widths,
                                     highlight_rows=hi_rows,
-                                    highlight_cols=[3],
+                                    highlight_cols=[2],   # columna "Semana/Año Actual"
                                     neg_cells=neg_cells,
-                                    font_size=7)
+                                    font_size=7,
+                                    label_col=CAT_COL,
+                                    label_align="CENTER",
+                                    sep_before_cols=[CAT_COL, CAT_COL + 1])
         tbl.wrapOn(c, cw, 300)
         th = tbl._height
         tbl.drawOn(c, self.MARGIN, y - th)
@@ -1034,8 +1608,25 @@ class LocoReportePDF:
             p = (d / b_val * 100) if b_val != 0 else 0
             return d, p
 
+        def _pp(d):
+            """Formatea variación de un porcentaje en puntos porcentuales."""
+            return f"{d:+.1f} pp"
+
+        def _int_var(d):
+            """Formatea variación de un conteo con signo y separador de miles."""
+            return f"{int(round(d)):+,}"
+
+        # Variaciones por métrica (vs Plan y vs Año Anterior)
         v_plan_d, v_plan_p = var(cur["ventas"], plan.get("ventas", 0))
         v_ant_d,  v_ant_p  = var(cur["ventas"], lasty["ventas"])
+        m_plan_d, m_plan_p = var(cur["margen_pct"], plan.get("margen_pct", 0))
+        m_ant_d,  m_ant_p  = var(cur["margen_pct"], lasty["margen_pct"])
+        b_plan_d, b_plan_p = var(cur["botellas"], plan.get("botellas", 0))
+        b_ant_d,  b_ant_p  = var(cur["botellas"], lasty["botellas"])
+        c_plan_d, c_plan_p = var(cur["cajas"], plan.get("cajas", 0))
+        c_ant_d,  c_ant_p  = var(cur["cajas"], lasty["cajas"])
+        t_plan_d, t_plan_p = var(cur["ticket"], plan.get("ticket", 0))
+        t_ant_d,  t_ant_p  = var(cur["ticket"], lasty["ticket"])
 
         header = ["Métrica", "Año Anterior", "Semana Anterior",
                   "Plan", "Actual (Resaltado)", "Var vs Plan $",
@@ -1048,21 +1639,34 @@ class LocoReportePDF:
              fmt_currency(v_plan_d), fmt_pct(v_plan_p),
              fmt_currency(v_ant_d), fmt_pct(v_ant_p)),
             ("Margen %",         fmt_pct(lasty["margen_pct"]), fmt_pct(prev["margen_pct"]),
-             "—", fmt_pct(cur["margen_pct"]), "—", "—", "—", "—"),
+             fmt_pct(plan.get("margen_pct", 0)), fmt_pct(cur["margen_pct"]),
+             _pp(m_plan_d), fmt_pct(m_plan_p),
+             _pp(m_ant_d), fmt_pct(m_ant_p)),
             ("#Botellas",        fmt_int(lasty["botellas"]), fmt_int(prev["botellas"]),
-             fmt_int(plan.get("botellas", 0)), fmt_int(cur["botellas"]), "—", "—", "—", "—"),
+             fmt_int(plan.get("botellas", 0)), fmt_int(cur["botellas"]),
+             _int_var(b_plan_d), fmt_pct(b_plan_p),
+             _int_var(b_ant_d), fmt_pct(b_ant_p)),
             ("Cajas 9L",         fmt_int(lasty["cajas"]), fmt_int(prev["cajas"]),
-             "—", fmt_int(cur["cajas"]), "—", "—", "—", "—"),
+             fmt_int(plan.get("cajas", 0)), fmt_int(cur["cajas"]),
+             _int_var(c_plan_d), fmt_pct(c_plan_p),
+             _int_var(c_ant_d), fmt_pct(c_ant_p)),
             ("Ticket Promedio $", fmt_ticket(lasty["ticket"]), fmt_ticket(prev["ticket"]),
-             "—", fmt_ticket(cur["ticket"]), "—", "—", "—", "—"),
+             fmt_ticket(plan.get("ticket", 0)), fmt_ticket(cur["ticket"]),
+             fmt_ticket(t_plan_d), fmt_pct(t_plan_p),
+             fmt_ticket(t_ant_d), fmt_pct(t_ant_p)),
         ]
 
+        # Colorear en rojo las variaciones negativas (columnas 5-8) de cada métrica
+        deltas = [
+            (v_plan_d, v_ant_d), (m_plan_d, m_ant_d), (b_plan_d, b_ant_d),
+            (c_plan_d, c_ant_d), (t_plan_d, t_ant_d),
+        ]
         neg_cells = []
         for ri, m in enumerate(metrics, 1):
             rows.append(list(m))
-            if ri == 1:
-                if v_plan_d < 0: neg_cells += [(ri, 5), (ri, 6)]
-                if v_ant_d  < 0: neg_cells += [(ri, 7), (ri, 8)]
+            plan_d, ant_d = deltas[ri - 1]
+            if plan_d < 0: neg_cells += [(ri, 5), (ri, 6)]
+            if ant_d  < 0: neg_cells += [(ri, 7), (ri, 8)]
 
         cw = self.CONTENT_W
         col_widths = [cw * 0.16, cw * 0.10, cw * 0.11, cw * 0.10,

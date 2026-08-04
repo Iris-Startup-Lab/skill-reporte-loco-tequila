@@ -57,7 +57,7 @@ def _to_json(obj) -> str:
 # Preparar datos para el dashboard
 # ---------------------------------------------------------------------------
 
-def _prepare_data(proc: LocoDataProcessor) -> dict:
+def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = None) -> dict:
     """Prepara todos los datasets que el dashboard necesita para filtrado reactivo."""
     df = proc.get_dataframe_dashboard()
     df = df.fillna(0)
@@ -69,6 +69,7 @@ def _prepare_data(proc: LocoDataProcessor) -> dict:
     productos = [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER if p in df["producto"].unique()]
     canales   = [c for c in CANAL_ORDER if c in df["canal"].unique()]
     estados   = sorted([str(e) for e in df["estado"].dropna().unique().tolist() if str(e).strip()])
+    clientes  = sorted([str(cl) for cl in df["cliente"].dropna().unique().tolist() if str(cl).strip()])
 
     # Agrupar tabla transaccional limpia para TODOS los registros del dataset
     df_tabla = df.groupby(
@@ -109,6 +110,15 @@ def _prepare_data(proc: LocoDataProcessor) -> dict:
     # Resumen ejecutivo inicial
     resumen = proc.get_resumen_ejecutivo()
 
+    # Oportunidades y riesgos: internos + contexto de mercado (si se proporcionó)
+    oportunidades = proc.get_oportunidades_riesgos()
+    if contexto_mercado and contexto_mercado.get("disponible"):
+        # Quitar el placeholder interno de "contexto no disponible"
+        oportunidades = [o for o in oportunidades
+                         if "Contexto de mercado no disponible" not in o.get("hallazgo", "")]
+        # Agregar los hallazgos reales del contexto de mercado (CRT/agave/NOM)
+        oportunidades = oportunidades + contexto_mercado.get("hallazgos", [])
+
     return {
         "meta": {
             "semana": proc.semana,
@@ -121,6 +131,7 @@ def _prepare_data(proc: LocoDataProcessor) -> dict:
             "productos": productos,
             "canales": canales,
             "estados": estados,
+            "clientes": clientes,
         },
         "kpis_initial": {
             "ventas_netas": float(resumen["actual"]["ventas_netas"]),
@@ -136,7 +147,7 @@ def _prepare_data(proc: LocoDataProcessor) -> dict:
         },
         "plan_map": plan_map,
         "tabla": tabla_records,
-        "oportunidades": proc.get_oportunidades_riesgos(),
+        "oportunidades": oportunidades,
         "product_colors": {PRODUCT_DISPLAY_NAMES.get(k, k): v for k, v in PRODUCT_COLORS.items()},
         "canal_colors": CANAL_COLORS,
     }
@@ -488,8 +499,8 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     <select id="fEstado" onchange="applyFilters()"><option value="all">Todos</option></select>
   </div>
   <div class="filter-group">
-    <label>Buscar cliente</label>
-    <input type="text" id="fCliente" placeholder="Nombre cliente..." oninput="applyFilters()">
+    <label>Cliente</label>
+    <select id="fCliente" onchange="applyFilters()"><option value="all">Todos</option></select>
   </div>
   <button class="btn btn-primary" onclick="applyFilters()">⚡ Aplicar</button>
   <button class="btn btn-secondary" onclick="resetFilters()">↺ Limpiar</button>
@@ -638,6 +649,7 @@ function populateFilters() {{
   add('fProducto', DATA.filtros.productos);
   add('fCanal',    DATA.filtros.canales);
   add('fEstado',   DATA.filtros.estados);
+  add('fCliente',  DATA.filtros.clientes || []);
 }}
 
 // ── Motor de Filtrado y Recálculo Dinámico ────────────────────────────────
@@ -647,7 +659,7 @@ function applyFilters() {{
   const prodVal     = document.getElementById('fProducto').value;
   const canalVal    = document.getElementById('fCanal').value;
   const estadoVal   = document.getElementById('fEstado').value;
-  const clienteVal  = document.getElementById('fCliente').value.toLowerCase().trim();
+  const clienteVal  = document.getElementById('fCliente').value;
 
   filteredTabla = DATA.tabla.filter(r => {{
     if (anioVal    !== 'all' && r.anio !== Number(anioVal)) return false;
@@ -655,7 +667,7 @@ function applyFilters() {{
     if (prodVal    !== 'all' && r.producto_display !== prodVal) return false;
     if (canalVal   !== 'all' && r.canal !== canalVal) return false;
     if (estadoVal  !== 'all' && r.estado !== estadoVal) return false;
-    if (clienteVal && !(r.cliente && r.cliente.toLowerCase().includes(clienteVal))) return false;
+    if (clienteVal !== 'all' && r.cliente !== clienteVal) return false;
     return true;
   }});
 
@@ -664,10 +676,9 @@ function applyFilters() {{
 }}
 
 function resetFilters() {{
-  ['fAnio','fSemana','fProducto','fCanal','fEstado'].forEach(id => {{
+  ['fAnio','fSemana','fProducto','fCanal','fEstado','fCliente'].forEach(id => {{
     document.getElementById(id).value = 'all';
   }});
-  document.getElementById('fCliente').value = '';
   filteredTabla = [...DATA.tabla];
   page = 1;
   updateDashboard();
@@ -711,14 +722,81 @@ function renderKPIsDynamic(records) {{
 
   const vsPlanPct = totalPlan > 0 ? ((totalVentas - totalPlan) / totalPlan * 100) : 0;
 
+  // ── Comparativas dinámicas ──────────────────────────────────────────────
+  const anioSel  = document.getElementById('fAnio').value;
+  const semSel   = document.getElementById('fSemana').value;
+
+  let wowPct = DATA.kpis_initial.vs_semana_ant_pct;
+  let yoyPct = DATA.kpis_initial.vs_anio_ant_pct;
+  let ytdPct = DATA.kpis_initial.ytd_vs_ly_pct;
+  let ytdVal = DATA.kpis_initial.ytd;
+
+  // Si hay semana y año seleccionados, calcular WoW y YoY dinámicos
+  if (semSel !== 'all' && anioSel !== 'all') {{
+    const semNum = parseInt(semSel.replace('W',''));
+    const anioNum = parseInt(anioSel);
+    const prevSemNum = semNum > 1 ? semNum - 1 : 52;
+    const prevAnioNum = semNum > 1 ? anioNum : anioNum - 1;
+
+    const ventaActual = totalVentas;
+
+    // Ventas semana anterior
+    const recsPrevSem = DATA.tabla.filter(r => {{
+      if (r.anio !== prevAnioNum || r.semana_num !== prevSemNum) return false;
+      const p = document.getElementById('fProducto').value;
+      const cv = document.getElementById('fCanal').value;
+      const e = document.getElementById('fEstado').value;
+      const cl = document.getElementById('fCliente').value.toLowerCase().trim();
+      if (p  !== 'all' && r.producto_display !== p) return false;
+      if (cv !== 'all' && r.canal !== cv) return false;
+      if (e  !== 'all' && r.estado !== e) return false;
+      if (cl && !(r.cliente && r.cliente.toLowerCase().includes(cl))) return false;
+      return true;
+    }});
+    const ventaPrevSem = recsPrevSem.reduce((s, r) => s + (r.venta_sin_iva || 0), 0);
+    wowPct = ventaPrevSem > 0 ? ((ventaActual - ventaPrevSem) / ventaPrevSem * 100) : 0;
+
+    // Ventas misma semana año anterior (YoY)
+    const recsPrevYY = DATA.tabla.filter(r => {{
+      if (r.anio !== anioNum - 1 || r.semana_num !== semNum) return false;
+      const p = document.getElementById('fProducto').value;
+      const cv = document.getElementById('fCanal').value;
+      const e = document.getElementById('fEstado').value;
+      const cl = document.getElementById('fCliente').value.toLowerCase().trim();
+      if (p  !== 'all' && r.producto_display !== p) return false;
+      if (cv !== 'all' && r.canal !== cv) return false;
+      if (e  !== 'all' && r.estado !== e) return false;
+      if (cl && !(r.cliente && r.cliente.toLowerCase().includes(cl))) return false;
+      return true;
+    }});
+    const ventaPrevYY = recsPrevYY.reduce((s, r) => s + (r.venta_sin_iva || 0), 0);
+    yoyPct = ventaPrevYY > 0 ? ((ventaActual - ventaPrevYY) / ventaPrevYY * 100) : 0;
+  }}
+
+  // YTD: si hay año seleccionado, comparar acumulado vs año anterior
+  if (anioSel !== 'all') {{
+    const anioNum = parseInt(anioSel);
+    const semMax = semSel !== 'all' ? parseInt(semSel.replace('W','')) : 999;
+    const recsYTD    = DATA.tabla.filter(r => r.anio === anioNum && r.semana_num <= semMax);
+    const recsYTD_LY = DATA.tabla.filter(r => r.anio === anioNum - 1 && r.semana_num <= semMax);
+    const ytdCur = recsYTD.reduce((s, r) => s + (r.venta_sin_iva || 0), 0);
+    const ytdLY  = recsYTD_LY.reduce((s, r) => s + (r.venta_sin_iva || 0), 0);
+    ytdVal = ytdCur;
+    ytdPct = ytdLY > 0 ? ((ytdCur - ytdLY) / ytdLY * 100) : 0;
+  }}
+
   const grid = document.getElementById('kpiGrid');
   const cards = [
-    {{ label: 'Ventas Netas ($)', value: fmtCur(totalVentas), delta: vsPlanPct, deltaLabel: 'vs Plan' }},
-    {{ label: 'Plan Est. ($)', value: fmtCur(totalPlan), delta: null }},
-    {{ label: '# Botellas', value: fmtInt(totalBotellas), delta: null }},
-    {{ label: 'Margen %', value: `${{margenPct.toFixed(1)}}%`, delta: null }},
-    {{ label: 'Ticket Promedio', value: `$${{ticket.toFixed(1)}}`, delta: null }},
-    {{ label: 'Registros', value: records.length.toLocaleString(), delta: null }},
+    {{ label: 'WoW — vs Semana Anterior',        value: `${{wowPct >= 0 ? '+' : ''}}${{wowPct.toFixed(1)}}%`,  delta: wowPct, deltaLabel: '' }},
+    {{ label: 'YoY — vs Misma Sem. Año Ant.',    value: `${{yoyPct >= 0 ? '+' : ''}}${{yoyPct.toFixed(1)}}%`,  delta: yoyPct, deltaLabel: '' }},
+    {{ label: 'YTD — vs Año Anterior (%)',        value: `${{ytdPct >= 0 ? '+' : ''}}${{ytdPct.toFixed(1)}}%`,  delta: ytdPct, deltaLabel: '' }},
+    {{ label: `YTD — Ventas Acumuladas`,          value: fmtCur(ytdVal),                                         delta: null }},
+    {{ label: 'Ventas Netas ($)',                 value: fmtCur(totalVentas),    delta: vsPlanPct, deltaLabel: 'vs Plan' }},
+    {{ label: 'Plan Est. ($)',                    value: fmtCur(totalPlan),       delta: null }},
+    {{ label: '# Botellas',                       value: fmtInt(totalBotellas),  delta: null }},
+    {{ label: 'Margen %',                         value: `${{margenPct.toFixed(1)}}%`, delta: null }},
+    {{ label: 'Ticket Promedio',                  value: `$${{ticket.toFixed(1)}}`,    delta: null }},
+    {{ label: 'Registros',                        value: records.length.toLocaleString(), delta: null }},
   ];
 
   grid.innerHTML = cards.map(c => `
@@ -734,6 +812,7 @@ function renderKPIsDynamic(records) {{
     </div>
   `).join('');
 }}
+
 
 // ── Recálculo y Renderizado Dinámico de Gráficas ──────────────────────────
 function renderChartsDynamic(records) {{
@@ -1096,10 +1175,11 @@ function fmtMillions(v) {{
 # ---------------------------------------------------------------------------
 
 def generate_dashboard(processor: LocoDataProcessor, output_path: str,
-                       logo_path: Optional[str] = None):
+                       logo_path: Optional[str] = None,
+                       contexto_mercado: Optional[dict] = None):
     """Genera el dashboard HTML y lo guarda en output_path."""
     print("[HTML] Preparando datos...")
-    data = _prepare_data(processor)
+    data = _prepare_data(processor, contexto_mercado=contexto_mercado)
 
     # Logo blanco inline para el header
     logo_svg = ""

@@ -27,15 +27,14 @@ Produce tres entregables profesionales optimizados para la toma de decisiones di
 
 La skill cumple estrictamente con el estándar universal de **Agent Skills** (definido en `SKILL.md` y documentado para desarrolladores en `AGENTS.md`), permitiendo que cualquier agente de Inteligencia Artificial comprenda las instrucciones, argumentos y herramientas necesarias para ejecutar el pipeline de forma autónoma.
 
-### 🤝 Protocolo de Bienvenida y Manejo de Datos de Entrada
+### 🤝 Protocolo de Bienvenida y Preguntas Iniciales (Máximo 2)
 
-Cuando el usuario activa la Skill o interactúa con el agente sin adjuntar datos:
+Cuando el usuario activa la Skill o interactúa con el agente:
 
-1. **Presentación Automática**: El agente saluda y explica los entregables (PDF, XLSX, Dashboard HTML).
-2. **Detección Inteligente de CSVs**: Escanea automáticamente los archivos CSV de la carpeta por palabras clave (`ventas`, `actuals`, `plan`, `presupuesto`) o por la presencia de columnas mínimas.
-3. **Muestra de Dataset de Ejemplo**: Si el usuario no conoce la estructura o no tiene los nombres exactos, el agente le enseña una muestra visual del esquema de columnas requerido (Ventas y Plan).
-4. **Manejo Faltante / Simulación**: Si el usuario no ha subido archivos, el agente ofrece amablemente procesar los **datos de prueba y simulación** en `data_for_test_and_simulation/` (Semana 30, 2026).
-5. **Guía de Opciones**: Ofrece menú interactivo para reporte completo, entregables individuales, comparativos personalizados (WoW, MoM, YoY) o inclusión de contexto de mercado tequilero (CRT, Agave, NOM-006).
+1. **Presentación Automática**: El agente saluda y explica los 3 entregables (PDF, XLSX, Dashboard HTML).
+2. **Pregunta 1: Fuente de Datos** (Solo si el usuario no ha adjuntado CSVs ni especificado ruta): Pregunta si usará datos propios o los de muestra (`data_for_test_and_simulation/`).
+3. **Pregunta 2: Periodo / Semana Base a Comparar** (Solo si el usuario no indicó la semana y año base en su mensaje): Pregunta qué semana y año tomar como punto de evaluación (ej. Semana 30 de 2026).
+4. **Mantenimiento del Estándar**: Verifica las columnas clave y genera automáticamente los 3 entregables con comparativos fijos (WoW, MoM, YoY, YTD, Rolling 52) y contexto de mercado tequilero (CRT, Agave, NOM-006).
 
 ---
 

@@ -247,11 +247,17 @@ class LocoDataProcessor:
     def _plan_kpis(self, year: int, week: int) -> Dict:
         dfp = self.dfp
         p = dfp[(dfp["anio_num"] == year) & (dfp["semana_num"] == week)]
+        ventas = p["plan_venta_sin_impuestos"].sum()
+        botellas = p["plan_botellas"].sum()
+        margen = p["plan_margen_pesos"].sum()
         return {
-            "ventas_netas": p["plan_venta_sin_impuestos"].sum(),
-            "botellas": p["plan_botellas"].sum(),
+            "ventas_netas": ventas,
+            "botellas": botellas,
             "cajas_9l": p["plan_cajas_9L"].sum(),
-            "margen_pesos": p["plan_margen_pesos"].sum(),
+            "margen_pesos": margen,
+            # Simétrico con _kpis: permite comparar todas las métricas vs plan
+            "margen_pct": (margen / ventas * 100) if ventas > 0 else 0,
+            "ticket_promedio": (ventas / botellas) if botellas > 0 else 0,
         }
 
     # ------------------------------------------------------------------
@@ -293,6 +299,10 @@ class LocoDataProcessor:
             "anio": y,
             "actual": cur,
             "plan": plan,
+            # KPIs completos de cada periodo de referencia — permiten construir
+            # comparativas por métrica (no solo ventas) en Excel y PDF.
+            "semana_anterior": prev,
+            "anio_anterior": lasty,
             "vs_plan": var(cur, plan),
             "vs_semana_anterior": var(cur, prev),
             "vs_anio_anterior": var(cur, lasty),
@@ -637,13 +647,22 @@ class LocoDataProcessor:
         ]
         plan_v = dfp_sku["plan_venta_sin_impuestos"].sum()
         plan_b = dfp_sku["plan_botellas"].sum()
+        plan_c = dfp_sku["plan_cajas_9L"].sum() if "plan_cajas_9L" in dfp_sku.columns else 0
+        plan_m = dfp_sku["plan_margen_pesos"].sum() if "plan_margen_pesos" in dfp_sku.columns else 0
 
         return {
             "producto": producto,
             "semana_actual": cur,
             "semana_anterior": prev,
             "anio_anterior": lasty,
-            "plan": {"ventas": plan_v, "botellas": plan_b},
+            "plan": {
+                "ventas": plan_v,
+                "botellas": plan_b,
+                "cajas": plan_c,
+                "margen_pesos": plan_m,
+                "margen_pct": (plan_m / plan_v * 100) if plan_v > 0 else 0,
+                "ticket": (plan_v / plan_b) if plan_b > 0 else 0,
+            },
             "ytd": ytd,
             "ytd_anio_anterior": ytd_ly,
         }
@@ -914,3 +933,266 @@ class LocoDataProcessor:
         }
         piv["label"] = piv["mes"].map(MESES)
         return piv
+
+    # ------------------------------------------------------------------
+    # Público: Serie anual semanal completa (para Hoja Comparativo)
+    # ------------------------------------------------------------------
+
+    def get_serie_anual_semanal(self, anio: Optional[int] = None) -> pd.DataFrame:
+        """
+        Retorna la serie semanal completa del año indicado (o del año del reporte)
+        hasta la semana actual. Incluye columna de promedio móvil de 4 semanas.
+
+        Columnas: semana_num, label, venta_actual, venta_anio_anterior, promedio_movil_4s
+        """
+        anio = anio or self.anio
+        df = self.df
+
+        # Año actual hasta semana seleccionada
+        df_cur = df[(df["anio_num"] == anio) & (df["semana_num"] <= self.semana)]
+        serie_cur = (
+            df_cur.groupby("semana_num")["venta_sin_impuestos"]
+            .sum()
+            .reset_index()
+            .rename(columns={"venta_sin_impuestos": "venta_actual"})
+        )
+
+        # Año anterior (mismas semanas)
+        df_prev = df[(df["anio_num"] == anio - 1) & (df["semana_num"] <= self.semana)]
+        serie_prev = (
+            df_prev.groupby("semana_num")["venta_sin_impuestos"]
+            .sum()
+            .reset_index()
+            .rename(columns={"venta_sin_impuestos": "venta_anio_anterior"})
+        )
+
+        result = serie_cur.merge(serie_prev, on="semana_num", how="left").fillna(0)
+        result = result.sort_values("semana_num").reset_index(drop=True)
+
+        # Promedio móvil de 4 semanas (ventana anterior — no incluye la semana actual en el cálculo)
+        result["promedio_movil_4s"] = (
+            result["venta_actual"].rolling(window=4, min_periods=1).mean()
+        )
+
+        result["label"] = result["semana_num"].apply(lambda x: f"W{int(x):02d}")
+        return result
+
+    # ------------------------------------------------------------------
+    # Público: Ventana Rolling 52 semanas
+    # ------------------------------------------------------------------
+
+    def get_rolling_52(self) -> Optional[Dict]:
+        """
+        Calcula la ventana de 52 semanas previas a la semana actual.
+        Retorna None si no hay datos suficientes (menos de 40 semanas con datos).
+        Retorna dict con ventas_rolling, ventas_rolling_ly, variacion.
+        """
+        y, w = self.anio, self.semana
+
+        # Construir lista de (year, week) de las últimas 52 semanas
+        periodos = []
+        cy, cw = y, w
+        for _ in range(52):
+            periodos.append((cy, cw))
+            cy, cw = _prev_week(cy, cw)
+
+        cond = pd.Series(False, index=self.df.index)
+        for ay, aw in periodos:
+            cond |= (self.df["anio_num"] == ay) & (self.df["semana_num"] == aw)
+        df_roll = self.df[cond]
+
+        # Necesitamos al menos 40 semanas con datos para que sea significativo
+        semanas_con_datos = df_roll.groupby(["anio_num", "semana_num"]).ngroups
+        if semanas_con_datos < 40:
+            return None
+
+        kpis_roll = self._kpis(df_roll)
+
+        # Mismo período del año anterior (52 semanas previas a la semana del año ant.)
+        periodos_ly = []
+        cy2, cw2 = y - 1, w
+        for _ in range(52):
+            periodos_ly.append((cy2, cw2))
+            cy2, cw2 = _prev_week(cy2, cw2)
+
+        cond_ly = pd.Series(False, index=self.df.index)
+        for ay, aw in periodos_ly:
+            cond_ly |= (self.df["anio_num"] == ay) & (self.df["semana_num"] == aw)
+        df_roll_ly = self.df[cond_ly]
+
+        kpis_ly = self._kpis(df_roll_ly)
+
+        va = kpis_roll["ventas_netas"]
+        vb = kpis_ly["ventas_netas"]
+        d = va - vb
+        p = (d / vb * 100) if vb != 0 else 0.0
+
+        return {
+            "semanas_incluidas": semanas_con_datos,
+            "ventas_rolling": va,
+            "botellas_rolling": kpis_roll["botellas"],
+            "ventas_rolling_ly": vb,
+            "var_abs": d,
+            "var_pct": p,
+            "label_a": f"Rolling 52 sem hasta S{w:02d}-{y}",
+            "label_b": f"Rolling 52 sem hasta S{w:02d}-{y-1}",
+        }
+
+    # ------------------------------------------------------------------
+    # Público: Clientes en riesgo y en crecimiento vs año anterior
+    # ------------------------------------------------------------------
+
+    def get_clientes_riesgo_crecimiento(
+        self,
+        umbral_riesgo_pct: float = -20.0,
+        umbral_crecimiento_pct: float = 15.0,
+        venta_minima: float = 50_000.0,
+    ) -> Dict:
+        """
+        Compara las ventas YTD por cliente entre año actual y año anterior.
+        Retorna dos DataFrames: 'riesgo' y 'crecimiento'.
+
+        Params
+        ------
+        umbral_riesgo_pct     : variación % negativa mínima para calificar como riesgo (ej. -20%)
+        umbral_crecimiento_pct: variación % positiva mínima para calificar como crecimiento (ej. +15%)
+        venta_minima          : piso de venta en año anterior (para filtrar cuentas marginales)
+        """
+        y, w = self.anio, self.semana
+        ly, lyw = _same_week_prev_year(y, w)
+
+        df_cur = self._filter_ytd(y, w)
+        df_ly  = self._filter_ytd(ly, lyw)
+
+        agg_cur = df_cur.groupby("cliente")["venta_sin_impuestos"].sum().rename("venta_actual")
+        agg_ly  = df_ly.groupby("cliente")["venta_sin_impuestos"].sum().rename("venta_anterior")
+
+        merged = pd.concat([agg_cur, agg_ly], axis=1).fillna(0)
+        # Filtrar piso de venta mínima en año anterior
+        merged = merged[merged["venta_anterior"] >= venta_minima]
+
+        merged["variacion_abs"] = merged["venta_actual"] - merged["venta_anterior"]
+        merged["variacion_pct"] = (
+            (merged["variacion_abs"] / merged["venta_anterior"]) * 100
+        ).replace([np.inf, -np.inf], 0).fillna(0)
+
+        riesgo = (
+            merged[merged["variacion_pct"] <= umbral_riesgo_pct]
+            .sort_values("variacion_pct")
+            .head(15)
+        )
+        crecimiento = (
+            merged[merged["variacion_pct"] >= umbral_crecimiento_pct]
+            .sort_values("variacion_pct", ascending=False)
+            .head(15)
+        )
+
+        return {"riesgo": riesgo, "crecimiento": crecimiento}
+
+    # ------------------------------------------------------------------
+    # Público: Análisis de canal — año actual vs anterior + participación
+    # ------------------------------------------------------------------
+
+    def get_canal_analisis(self, mode: str = "anual") -> pd.DataFrame:
+        """
+        DataFrame de análisis por canal con año actual vs anterior.
+        Columnas: canal, unidades_actual, venta_actual, venta_anterior,
+                  pct_part_actual, pct_part_anterior, var_pp
+        mode: 'semanal' | 'anual'
+        """
+        y, w = self.anio, self.semana
+        ly, lyw = _same_week_prev_year(y, w)
+
+        if mode == "semanal":
+            df_cur = self._filter_period(y, w)
+            df_ly  = self._filter_period(ly, lyw)
+        else:
+            df_cur = self._filter_ytd(y, w)
+            df_ly  = self._filter_ytd(ly, lyw)
+
+        agg_cur = (
+            df_cur.groupby("canal_norm")
+            .agg(
+                unidades=("botellas", "sum"),
+                venta_actual=("venta_sin_impuestos", "sum"),
+            )
+            .reset_index()
+        )
+        agg_ly = (
+            df_ly.groupby("canal_norm")["venta_sin_impuestos"]
+            .sum()
+            .reset_index()
+            .rename(columns={"venta_sin_impuestos": "venta_anterior"})
+        )
+
+        merged = agg_cur.merge(agg_ly, on="canal_norm", how="outer").fillna(0)
+
+        total_cur = merged["venta_actual"].sum()
+        total_ly  = merged["venta_anterior"].sum()
+
+        merged["pct_part_actual"]   = (merged["venta_actual"]   / total_cur * 100).fillna(0) if total_cur > 0 else 0
+        merged["pct_part_anterior"] = (merged["venta_anterior"] / total_ly  * 100).fillna(0) if total_ly > 0 else 0
+        merged["var_pp"] = merged["pct_part_actual"] - merged["pct_part_anterior"]
+
+        # Orden canónico
+        canal_cat = pd.CategoricalDtype(CANAL_ORDER, ordered=True)
+        merged["canal_cat"] = merged["canal_norm"].astype(canal_cat)
+        merged = merged.sort_values("canal_cat").drop(columns=["canal_cat"])
+        merged = merged.rename(columns={"canal_norm": "canal"})
+
+        return merged.reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Público: Detalle Canal → Cliente → Producto
+    # ------------------------------------------------------------------
+
+    def get_cliente_producto_por_canal(
+        self,
+        canal: str,
+        sub_canal: Optional[str] = None,
+        mode: str = "anual",
+        top_n: int = 10,
+    ) -> Optional[Dict]:
+        """
+        Pivote Cliente × Producto para un canal (y sub-canal opcional).
+
+        Retorna dict con:
+          - 'pivot'      : DataFrame index=cliente, columnas=PRODUCT_ORDER + 'Total'
+                           (top_n clientes por venta + fila 'Otros' con el resto)
+          - 'total'      : venta total del canal/sub-canal en el periodo
+          - 'prod_tot'   : dict producto -> venta total (para fila Ventas Netas)
+        mode: 'semanal' (semana del reporte) | 'anual' (YTD hasta la semana)
+        Devuelve None si no hay datos.
+        """
+        y, w = self.anio, self.semana
+        df = self._filter_period(y, w) if mode == "semanal" else self._filter_ytd(y, w)
+        df = df[df["canal_norm"] == canal]
+        if sub_canal is not None:
+            df = df[df["sub_canal"] == sub_canal]
+        if df.empty:
+            return None
+
+        piv = (
+            df.groupby(["cliente", "producto"])["venta_sin_impuestos"]
+            .sum()
+            .unstack(fill_value=0)
+        )
+        for p in PRODUCT_ORDER:
+            if p not in piv.columns:
+                piv[p] = 0
+        piv = piv.reindex(columns=PRODUCT_ORDER, fill_value=0)
+        piv["Total"] = piv.sum(axis=1)
+        piv = piv.sort_values("Total", ascending=False)
+
+        total_all = float(piv["Total"].sum())
+
+        # Top N + 'Otros'
+        if len(piv) > top_n:
+            top = piv.head(top_n)
+            resto = piv.iloc[top_n:][PRODUCT_ORDER + ["Total"]].sum()
+            resto.name = "Otros"
+            piv = pd.concat([top, resto.to_frame().T])
+
+        prod_tot = {p: float(piv[p].sum()) for p in PRODUCT_ORDER}
+
+        return {"pivot": piv, "total": total_all, "prod_tot": prod_tot}

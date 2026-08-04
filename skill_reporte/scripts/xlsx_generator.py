@@ -20,7 +20,7 @@ import numpy as np
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, coordinate_to_tuple
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import DataBarRule
 
@@ -79,11 +79,15 @@ FONT_SUB     = _font(italic=True, color=SECTION_SUBTITLE, size=8)
 
 BORDER = _border_thin()
 
-FMT_CURRENCY = '#,##0'
-FMT_PCT      = '0%'
-FMT_PCT1     = '0.0%'
-FMT_INT      = '#,##0'
-FMT_DECIMAL  = '#,##0.0'
+# Formatos de moneda: anteponen "$" y respetan separador de miles con comas.
+# El "$" va entre comillas para que Excel lo trate como texto literal.
+FMT_CURRENCY   = '"$"#,##0'
+FMT_PCT        = '0%'
+FMT_PCT1       = '0.0%'
+FMT_PCT_SIGNED = '+0.0%;-0.0%;0.0%'   # variaciones: muestran el signo
+FMT_INT        = '#,##0'              # conteos (botellas, cajas): sin "$"
+FMT_DECIMAL    = '"$"#,##0.0'         # moneda con 1 decimal (ticket promedio)
+FMT_PP         = '+0.0" pp";-0.0" pp";0.0" pp"'  # puntos porcentuales (margen)
 
 TRAFFIC_GREEN  = "00B050"
 TRAFFIC_YELLOW = "FFC000"
@@ -142,6 +146,45 @@ def _traffic_light(ws, row_idx: int, col_idx: int, value: float, thresholds=(-5,
     cell.alignment = _align("center")
 
 
+def _fix_chart_axes(chart):
+    """
+    Corrige los ejes que openpyxl deja mal configurados por defecto.
+
+    openpyxl (3.1.x) crea ambos ejes con ``axPos='l'`` y sin el elemento
+    ``<c:delete>``. Con ambos ejes "a la izquierda" Excel no puede dibujar el
+    eje de categorías (horizontal) y solo se ven las líneas de cuadrícula. Aquí
+    se fija la posición correcta según la orientación y se fuerza ``delete=0``
+    (eje visible), de modo que los ejes se dibujen solos al abrir el archivo.
+    """
+    # BarChart con type="bar" es horizontal (categorías a la izquierda);
+    # LineChart y columnas ("col") son verticales (categorías abajo).
+    horizontal = getattr(chart, "type", None) == "bar"
+
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+
+    if horizontal:
+        chart.x_axis.axPos = "l"   # eje de categorías a la izquierda
+        chart.y_axis.axPos = "b"   # eje de valores abajo
+    else:
+        chart.x_axis.axPos = "b"   # eje de categorías abajo
+        chart.y_axis.axPos = "l"   # eje de valores a la izquierda
+
+    for ax in (chart.x_axis, chart.y_axis):
+        ax.tickLblPos = "nextTo"
+        ax.majorTickMark = "out"
+        ax.minorTickMark = "none"
+
+
+def _add_chart_with_note(ws, chart, anchor: str, span_cols: int = 8):
+    """
+    Agrega una gráfica al worksheet con los ejes ya corregidos para que Excel
+    los dibuje automáticamente (ver :func:`_fix_chart_axes`).
+    """
+    _fix_chart_axes(chart)
+    ws.add_chart(chart, anchor)
+
+
 # ---------------------------------------------------------------------------
 # Generador principal
 # ---------------------------------------------------------------------------
@@ -167,6 +210,7 @@ class LocoReporteXLSX:
         self._sheet_productos()
         self._sheet_clientes()
         self._sheet_regional()
+        self._sheet_canal()
         self._sheet_oportunidades()
         self.wb.save(self.output_path)
         print(f"[XLSX] Guardado: {self.output_path}")
@@ -201,81 +245,105 @@ class LocoReporteXLSX:
         ws["A4"].font = FONT_SECTION
         ws["A4"].fill = FILL_CREAM
 
-        kpi_headers = ["Métrica", "Valor", "Plan", "Var vs Plan", "Año Anterior", "Var vs Año Ant."]
+        kpi_headers = ["Métrica", "Valor", "Plan", "Var vs Plan", "Var vs Plan %",
+                       "Año Anterior", "Var vs Año Ant.", "Var vs Año Ant. %"]
         _header_row(ws, 5, kpi_headers, start_col=1)
 
-        cur  = r["actual"]
-        plan = r["plan"]
-        vp   = r["vs_plan"]
-        ly   = r["vs_anio_anterior"]
-        prev = r["vs_semana_anterior"]
+        cur   = r["actual"]
+        plan  = r["plan"]
+        lasty = r["anio_anterior"]
 
-        # Definir métricas
-        kpis = [
-            ("Ventas Netas (sin IVA)",
-             cur["ventas_netas"], plan["ventas_netas"],
-             vp["abs"], vp["pct"],
-             cur["ventas_netas"] - ly["abs"], ly["pct"]),
-            ("# Botellas Vendidas",
-             cur["botellas"], plan.get("botellas", 0),
-             None, None, None, None),
-            ("Cajas 9 Litros",
-             cur["cajas_9l"], plan.get("cajas_9l", 0),
-             None, None, None, None),
-            ("Margen % Estimado",
-             cur["margen_pct"] / 100, None,
-             None, None, None, None),
-            ("Ticket Promedio $",
-             cur["ticket_promedio"], None,
-             None, None, None, None),
+        # (etiqueta, clave, tipo)  tipo: money | int | pct | money1
+        metricas_kpi = [
+            ("Ventas Netas (sin IVA)", "ventas_netas",     "money"),
+            ("# Botellas Vendidas",    "botellas",          "int"),
+            ("Cajas 9 Litros",         "cajas_9l",          "int"),
+            ("Margen % Estimado",      "margen_pct",        "pct"),
+            ("Ticket Promedio $",      "ticket_promedio",   "money1"),
         ]
 
-        neg_c = [4, 6]
-        for ri, (met, val, plan_v, var_abs, var_pct, ant_val, ant_pct) in enumerate(kpis, 6):
+        for ri, (met, key, kind) in enumerate(metricas_kpi, 6):
+            val    = cur.get(key, 0)
+            plan_v = plan.get(key, 0)
+            ant_v  = lasty.get(key, 0)
+
+            if kind == "pct":
+                # Márgenes: el valor se guarda como fracción (formato %); la
+                # variación se expresa en puntos porcentuales (pp) y en % relativo.
+                val_cell, plan_cell, ant_cell = val / 100, plan_v / 100, ant_v / 100
+                var_plan = val - plan_v            # pp (crudo)
+                var_ant  = val - ant_v
+                fmt_val, fmt_abs = FMT_PCT1, FMT_PP
+            else:
+                val_cell, plan_cell, ant_cell = val, plan_v, ant_v
+                var_plan = val - plan_v
+                var_ant  = val - ant_v
+                fmt_val = FMT_CURRENCY if kind == "money" else (
+                    FMT_DECIMAL if kind == "money1" else FMT_INT)
+                fmt_abs = fmt_val
+
+            var_plan_p = (var_plan / plan_v) if (kind != "pct" and plan_v) else (
+                ((val - plan_v) / plan_v) if plan_v else None)
+            var_ant_p  = (var_ant / ant_v) if (kind != "pct" and ant_v) else (
+                ((val - ant_v) / ant_v) if ant_v else None)
+
             row_vals = [
                 met,
-                val,
-                plan_v if plan_v else "—",
-                var_abs if var_abs is not None else "—",
-                f"{var_pct:+.1f}%" if var_pct is not None else "—",
-                ant_val if ant_val is not None else "—",
-                f"{ant_pct:+.1f}%" if ant_pct is not None else "—",
+                val_cell,
+                plan_cell  if plan_v else "—",
+                var_plan   if plan_v else "—",
+                var_plan_p if var_plan_p is not None else "—",
+                ant_cell   if ant_v else "—",
+                var_ant    if ant_v else "—",
+                var_ant_p  if var_ant_p is not None else "—",
             ]
-            cream = (ri % 2 == 0)
-            _data_row(ws, ri, row_vals[:6], bold=(ri == 6), cream=(ri == 6))
+            _data_row(ws, ri, row_vals, bold=(ri == 6), cream=(ri == 6),
+                      neg_cols=[4, 7])
 
-            # Formatear celdas numéricas
-            cell_val = ws.cell(row=ri, column=2)
-            if met == "Margen % Estimado":
-                cell_val.number_format = FMT_PCT1
-            elif met == "Ticket Promedio $":
-                cell_val.number_format = FMT_DECIMAL
-                cell_val.value = val
-            elif "Botellas" in met or "Cajas" in met:
-                cell_val.number_format = FMT_INT
-            else:
-                cell_val.number_format = FMT_CURRENCY
+            # Formatos por celda (solo si la celda es numérica)
+            fmt_map = {
+                2: fmt_val, 3: fmt_val, 4: fmt_abs, 5: FMT_PCT_SIGNED,
+                6: fmt_val, 7: fmt_abs, 8: FMT_PCT_SIGNED,
+            }
+            for col, fmt in fmt_map.items():
+                cell = ws.cell(row=ri, column=col)
+                # Aplica el formato a cualquier valor numérico (incluye numpy
+                # int64/float64); solo se omite el marcador de texto "—".
+                if not isinstance(cell.value, str) and cell.value is not None:
+                    cell.number_format = fmt
 
         # --- Semáforos ---
-        ws.merge_cells("A13:B13")
+        ws.merge_cells("A13:F13")
         ws["A13"] = "Semáforo de Desempeño"
         ws["A13"].font = FONT_SECTION
         ws["A13"].fill = FILL_CREAM
 
         semaforos = [
-            ("WoW (vs semana anterior)",  r["vs_semana_anterior"]["pct"]),
-            ("MoM (vs mes anterior)",     r["mes_vs_anterior"]["pct"]),
-            ("MoM vs Año Anterior",       r["mes_vs_ly"]["pct"]),
-            ("YTD vs Año Anterior",       r["ytd_vs_ly"]["pct"]),
-            ("vs Plan Semanal",           r["vs_plan"]["pct"]),
+            ("WoW (vs semana anterior)",          r["vs_semana_anterior"]["pct"]),
+            ("Semana vs Mismo Período Año Ant.",   r["vs_anio_anterior"]["pct"]),
+            ("YTD vs Mismo Corte Año Anterior",    r["ytd_vs_ly"]["pct"]),
+            ("vs Plan Semanal",                    r["vs_plan"]["pct"]),
         ]
-        _header_row(ws, 14, ["Indicador", "Variación", "Estado"], start_col=1)
+        _header_row(ws, 14, ["Indicador", "Variación %", "Estado", "Lectura"], start_col=1)
         for ri, (label, pct) in enumerate(semaforos, 15):
+            if pct < -10:
+                lectura = "Atención: caída relevante — revisar causa raíz"
+            elif pct < 0:
+                lectura = "Ligera baja — monitorear"
+            elif pct < 5:
+                lectura = "Desempeño estable"
+            elif pct < 15:
+                lectura = "Crecimiento sólido — sostener estrategia"
+            else:
+                lectura = "Crecimiento fuerte — identificar driver y replicar"
             ws.cell(row=ri, column=1, value=label).font = FONT_BODY
             ws.cell(row=ri, column=1).alignment = _align("left")
             ws.cell(row=ri, column=2, value=f"{pct:+.1f}%").alignment = _align("right")
             ws.cell(row=ri, column=2).font = FONT_BODY
             _traffic_light(ws, ri, 3, pct)
+            ws.cell(row=ri, column=4, value=lectura).font = FONT_SUB
+            ws.cell(row=ri, column=4).alignment = _align("left", wrap=True)
+            ws.cell(row=ri, column=4).border = BORDER
             for ci in range(1, 4):
                 ws.cell(row=ri, column=ci).border = BORDER
 
@@ -294,97 +362,197 @@ class LocoReporteXLSX:
             _data_row(ws, ri, vals)
             ws.cell(row=ri, column=3).font = _font(bold=True, color=tipo_color, size=9)
 
-        # Anchos de columna
-        widths = [30, 14, 12, 14, 12, 14]
+        # Anchos de columna (8 columnas de la tabla KPI)
+        widths = [30, 16, 15, 15, 13, 16, 15, 13]
         for i, w in enumerate(widths, 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
     # ------------------------------------------------------------------
-    # Hoja 2: Comparativo WoW / MoM / YoY / YTD
+    # Hoja 2: Comparativo — 4 ventanas estándar + serie anual
     # ------------------------------------------------------------------
 
     def _sheet_comparativo(self):
         ws = self.wb.create_sheet("Comparativo Periodos")
         ws.sheet_view.showGridLines = False
 
-        r = self.proc.get_resumen_ejecutivo()
+        r   = self.proc.get_resumen_ejecutivo()
+        sem = self.proc.semana
+        anio = self.proc.anio
+        ly   = anio - 1
 
         ws.merge_cells("A1:G1")
-        ws["A1"] = "Comparativo de Periodos — Ventas sin IVA (MXN)"
+        ws["A1"] = f"Comparativo de Periodos — Semana {sem:02d} · {anio} — Ventas sin IVA (MXN)"
         ws["A1"].font = FONT_TITLE
         ws["A1"].alignment = _align("left")
         ws["A1"].fill = _fill("FFF8F0")
 
-        # Tabla WoW
-        self._write_comparison_block(ws, start_row=3, title="Semana a Semana (WoW)",
-                                      actual=r["actual"]["ventas_netas"],
-                                      anterior=r["actual"]["ventas_netas"] - r["vs_semana_anterior"]["abs"],
-                                      var_abs=r["vs_semana_anterior"]["abs"],
-                                      var_pct=r["vs_semana_anterior"]["pct"],
-                                      labels=["Semana Actual", "Semana Anterior"])
-        self._write_comparison_block(ws, start_row=9, title="Mes a Mes (MoM)",
-                                      actual=r["mes_actual"]["ventas_netas"],
-                                      anterior=r["mes_actual"]["ventas_netas"] - r["mes_vs_anterior"]["abs"],
-                                      var_abs=r["mes_vs_anterior"]["abs"],
-                                      var_pct=r["mes_vs_anterior"]["pct"],
-                                      labels=["Mes Actual", "Mes Anterior"])
-        self._write_comparison_block(ws, start_row=15, title="Mes vs Año Anterior (YoY Mensual)",
-                                      actual=r["mes_actual"]["ventas_netas"],
-                                      anterior=r["mes_actual"]["ventas_netas"] - r["mes_vs_ly"]["abs"],
-                                      var_abs=r["mes_vs_ly"]["abs"],
-                                      var_pct=r["mes_vs_ly"]["pct"],
-                                      labels=["Mes Actual", "Mismo Mes Año Ant."])
-        self._write_comparison_block(ws, start_row=21, title="Acumulado del Año (YTD)",
-                                      actual=r["ytd_actual"]["ventas_netas"],
-                                      anterior=r["ytd_actual"]["ventas_netas"] - r["ytd_vs_ly"]["abs"],
-                                      var_abs=r["ytd_vs_ly"]["abs"],
-                                      var_pct=r["ytd_vs_ly"]["pct"],
-                                      labels=["YTD Actual", "YTD Año Anterior"])
+        # Nota metodológica
+        ws.merge_cells("A2:G2")
+        ws["A2"] = "Ventanas comparativas: WoW | Semana vs Mismo Período Año Anterior | YTD vs LY | Rolling 52 sem (si aplica)"
+        ws["A2"].font = FONT_SUB
+        ws["A2"].fill = _fill("FFF8F0")
 
-        # Tabla 12 semanas rolling
-        row = 27
-        ws.merge_cells(f"A{row}:G{row}")
-        ws[f"A{row}"] = "Últimas 12 Semanas — Ventas Semanales"
-        ws[f"A{row}"].font = FONT_SECTION
-        ws[f"A{row}"].fill = FILL_CREAM
+        # ── BLOQUE A: WoW ──────────────────────────────────────────────
+        sem_ant_v = r["actual"]["ventas_netas"] - r["vs_semana_anterior"]["abs"]
+        self._write_comparison_block(
+            ws, start_row=4,
+            title=f"Bloque A — Semana a Semana (WoW): S{sem:02d} vs S{sem-1 if sem > 1 else 52:02d}",
+            actual=r["actual"]["ventas_netas"],
+            anterior=sem_ant_v,
+            var_abs=r["vs_semana_anterior"]["abs"],
+            var_pct=r["vs_semana_anterior"]["pct"],
+            labels=[f"Semana {sem:02d}-{anio}", f"Semana {sem-1 if sem > 1 else 52:02d}-{anio if sem > 1 else ly}"],
+            extra_kpis=r["actual"]
+        )
 
-        serie = self.proc.get_serie_semanal(n_semanas=12)
-        plan  = self.proc.get_plan_semanal(n_semanas=12)
-        cols_hdr = ["Semana", "Ventas Netas $", "Plan $", "Var vs Plan $", "Var vs Plan %"]
-        _header_row(ws, row + 1, cols_hdr, start_col=1)
+        # ── BLOQUE B: YoY Semanal ──────────────────────────────────────
+        yoy_sem_ant_v = r["actual"]["ventas_netas"] - r["vs_anio_anterior"]["abs"]
+        self._write_comparison_block(
+            ws, start_row=11,
+            title=f"Bloque B — Semana vs Mismo Período Año Anterior: S{sem:02d}-{anio} vs S{sem:02d}-{ly}",
+            actual=r["actual"]["ventas_netas"],
+            anterior=yoy_sem_ant_v,
+            var_abs=r["vs_anio_anterior"]["abs"],
+            var_pct=r["vs_anio_anterior"]["pct"],
+            labels=[f"S{sem:02d}-{anio}", f"S{sem:02d}-{ly}"]
+        )
 
+        # ── BLOQUE C: YTD vs LY ────────────────────────────────────────
+        self._write_comparison_block(
+            ws, start_row=18,
+            title=f"Bloque C — Acumulado del Año (YTD): {anio} vs {ly} (hasta S{sem:02d})",
+            actual=r["ytd_actual"]["ventas_netas"],
+            anterior=r["ytd_actual"]["ventas_netas"] - r["ytd_vs_ly"]["abs"],
+            var_abs=r["ytd_vs_ly"]["abs"],
+            var_pct=r["ytd_vs_ly"]["pct"],
+            labels=[f"YTD {anio} (S01–S{sem:02d})", f"YTD {ly} (S01–S{sem:02d})"]
+        )
+
+        # ── BLOQUE D: Rolling 52 semanas (condicional) ─────────────────
+        row_after_blocks = 26
+        rolling = self.proc.get_rolling_52()
+        if rolling:
+            self._write_comparison_block(
+                ws, start_row=row_after_blocks,
+                title=f"Bloque D — Rolling 52 Semanas ({rolling['semanas_incluidas']} sem con datos)",
+                actual=rolling["ventas_rolling"],
+                anterior=rolling["ventas_rolling_ly"],
+                var_abs=rolling["var_abs"],
+                var_pct=rolling["var_pct"],
+                labels=[rolling["label_a"], rolling["label_b"]]
+            )
+            serie_start = row_after_blocks + 8
+        else:
+            # Nota explicativa si no hay datos suficientes
+            ws.merge_cells(f"A{row_after_blocks}:G{row_after_blocks}")
+            ws[f"A{row_after_blocks}"] = (
+                "Bloque D — Rolling 52 Semanas: no disponible "
+                "(se requieren al menos 40 semanas con datos históricos)"
+            )
+            ws[f"A{row_after_blocks}"].font = FONT_SUB
+            ws[f"A{row_after_blocks}"].fill = _fill("F5F5F5")
+            serie_start = row_after_blocks + 3
+
+        # ── SERIE ANUAL COMPLETA con Promedio Móvil 4 sem ─────────────
+        ws.merge_cells(f"A{serie_start}:G{serie_start}")
+        ws[f"A{serie_start}"] = f"Serie Semanal Completa {anio} — Ventas Netas vs Año Anterior (S01–S{sem:02d})"
+        ws[f"A{serie_start}"].font = FONT_SECTION
+        ws[f"A{serie_start}"].fill = FILL_CREAM
+
+        serie_anual = self.proc.get_serie_anual_semanal()
+        plan_data   = self.proc.get_plan_semanal(n_semanas=sem + 2)
         plan_dict = {}
-        if not plan.empty:
-            plan_dict = dict(zip(plan["label"], plan["plan_venta_sin_impuestos"]))
+        if not plan_data.empty:
+            plan_dict = dict(zip(plan_data["label"], plan_data["plan_venta_sin_impuestos"]))
 
-        for ri, (_, srow) in enumerate(serie.iterrows(), row + 2):
-            lbl   = srow.get("label", "")
-            venta = float(srow.get("Total", 0))
-            plan_v = plan_dict.get(lbl, 0)
-            var_abs = venta - plan_v
-            var_pct = (var_abs / plan_v * 100) if plan_v > 0 else 0
-            cream = (lbl == f"W{self.proc.semana:02d}")
-            _data_row(ws, ri, [lbl, venta, plan_v, var_abs, var_pct / 100],
-                      cream=cream, neg_cols=[4])
-            for ci, fmt in [(2, FMT_CURRENCY), (3, FMT_CURRENCY),
-                             (4, FMT_CURRENCY), (5, FMT_PCT1)]:
+        cols_hdr = [
+            "Semana", f"Ventas {anio} $", f"Ventas {ly} $",
+            "Plan $", "Var vs Plan $", "Var vs Plan %",
+            "Promedio Móvil 4 sem"
+        ]
+        _header_row(ws, serie_start + 1, cols_hdr, start_col=1)
+
+        chart_row_start = serie_start + 2
+        for ri, (_, srow) in enumerate(serie_anual.iterrows(), serie_start + 2):
+            lbl      = srow.get("label", "")
+            v_cur    = float(srow.get("venta_actual", 0))
+            v_ly     = float(srow.get("venta_anio_anterior", 0))
+            mov_avg  = float(srow.get("promedio_movil_4s", 0))
+            plan_v   = plan_dict.get(lbl, 0)
+            var_a    = v_cur - plan_v
+            var_p    = (var_a / plan_v * 100) if plan_v > 0 else 0
+            cream    = (lbl == f"W{sem:02d}")
+            _data_row(ws, ri, [lbl, v_cur, v_ly, plan_v, var_a, var_p / 100, mov_avg],
+                      cream=cream, neg_cols=[5])
+            for ci, fmt in [
+                (2, FMT_CURRENCY), (3, FMT_CURRENCY), (4, FMT_CURRENCY),
+                (5, FMT_CURRENCY), (6, FMT_PCT1), (7, FMT_CURRENCY)
+            ]:
                 ws.cell(row=ri, column=ci).number_format = fmt
 
+        chart_row_end = serie_start + 1 + len(serie_anual)
+
+        # ── Gráfica Line: ventas año actual + año anterior + promedio móvil ─
+        from openpyxl.chart import LineChart, Reference as Ref
+        try:
+            lc = LineChart()
+            lc.title = f"Tendencia Semanal — {anio} vs {ly} + Promedio Móvil 4 sem"
+            lc.y_axis.title = "$MXN (sin IVA)"
+            lc.x_axis.title = "Semana"
+            lc.x_axis.tickLblPos = "nextTo"
+            lc.y_axis.tickLblPos = "nextTo"
+            lc.style = 10
+            lc.width = 26
+            lc.height = 13
+
+            # Serie año actual (col 2)
+            d1 = Ref(ws, min_col=2, min_row=serie_start + 1, max_row=chart_row_end)
+            lc.add_data(d1, titles_from_data=True)
+            # Serie año anterior (col 3)
+            d2 = Ref(ws, min_col=3, min_row=serie_start + 1, max_row=chart_row_end)
+            lc.add_data(d2, titles_from_data=True)
+            # Promedio móvil (col 7)
+            d3 = Ref(ws, min_col=7, min_row=serie_start + 1, max_row=chart_row_end)
+            lc.add_data(d3, titles_from_data=True)
+
+            cats = Ref(ws, min_col=1, min_row=serie_start + 2, max_row=chart_row_end)
+            lc.set_categories(cats)
+
+            # Estilos de líneas
+            if lc.series:
+                from openpyxl.chart.series import SeriesLabel
+                from openpyxl.drawing.line import LineProperties
+                lc.series[0].graphicalProperties.line.solidFill = BRAND_MAROON.lstrip("#")
+                lc.series[0].graphicalProperties.line.width = 20000
+                if len(lc.series) > 1:
+                    lc.series[1].graphicalProperties.line.solidFill = "E7D6A6"
+                    lc.series[1].graphicalProperties.line.width = 15000
+                if len(lc.series) > 2:
+                    lc.series[2].graphicalProperties.line.solidFill = "E23B2E"
+                    lc.series[2].graphicalProperties.line.width = 12000
+                    lc.series[2].graphicalProperties.line.dashDot = "dash"
+
+            _add_chart_with_note(ws, lc, f"I{serie_start}")
+        except Exception:
+            pass  # gráfica opcional — no bloquea el reporte
+
         # Anchos
-        for i, w in enumerate([14, 18, 18, 18, 15], 1):
+        for i, w in enumerate([12, 18, 18, 18, 18, 14, 20], 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
-    def _write_comparison_block(self, ws, start_row: int, title: str,
-                                  actual: float, anterior: float,
-                                  var_abs: float, var_pct: float,
-                                  labels: list):
+    def _write_comparison_block(
+        self, ws, start_row: int, title: str,
+        actual: float, anterior: float,
+        var_abs: float, var_pct: float,
+        labels: list, extra_kpis: dict = None
+    ):
         ws.merge_cells(f"A{start_row}:G{start_row}")
         ws[f"A{start_row}"] = title
         ws[f"A{start_row}"].font = FONT_SECTION
         ws[f"A{start_row}"].fill = FILL_CREAM
 
         _header_row(ws, start_row + 1,
-                    [labels[0], labels[1], "Variación $", "Variación %", "Crecimiento"],
+                    [labels[0], labels[1], "Variación $", "Variación %", "Tendencia"],
                     start_col=1)
 
         vals = [actual, anterior, var_abs, var_pct / 100,
@@ -398,8 +566,17 @@ class LocoReporteXLSX:
         crec_cell = ws.cell(row=start_row + 2, column=5)
         crec_cell.font = _font(bold=True,
                                 color=TRAFFIC_GREEN if var_abs >= 0 else TRAFFIC_RED,
-                                size=11)
+                                size=12)
         crec_cell.alignment = _align("center")
+
+        # Fila extra con botellas y margen si se proporcionan KPIs
+        if extra_kpis:
+            ws.cell(row=start_row + 3, column=1,
+                    value=f"Botellas: {extra_kpis.get('botellas', 0):,.0f}   "
+                          f"Margen: ${extra_kpis.get('margen_pesos', 0):,.0f}   "
+                          f"Ticket Prom.: ${extra_kpis.get('ticket_promedio', 0):,.2f}"
+                    ).font = FONT_SUB
+            ws.merge_cells(f"A{start_row + 3}:G{start_row + 3}")
 
     # ------------------------------------------------------------------
     # Hoja 3: Por Producto
@@ -463,47 +640,97 @@ class LocoReporteXLSX:
 
         serie = self.proc.get_serie_semanal(n_semanas=12)
         if not serie.empty:
-            hdr = ["Semana"] + [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER if p in serie.columns] + ["Total"]
+            prods_presentes = [p for p in PRODUCT_ORDER if p in serie.columns]
+            hdr = ["Semana"] + [PRODUCT_DISPLAY_NAMES.get(p, p) for p in prods_presentes] + ["Total"]
             _header_row(ws, row_start + 1, hdr)
             for ri, (_, srow) in enumerate(serie.iterrows(), row_start + 2):
                 vals = [srow.get("label", "")]
-                for p in PRODUCT_ORDER:
-                    if p in srow.index:
-                        vals.append(float(srow[p]))
+                for p in prods_presentes:
+                    vals.append(float(srow[p]))
                 vals.append(float(srow.get("Total", 0)))
                 cream = (srow.get("label", "") == f"W{self.proc.semana:02d}")
                 _data_row(ws, ri, vals, cream=cream)
                 for ci in range(2, len(vals) + 1):
                     ws.cell(row=ri, column=ci).number_format = FMT_CURRENCY
 
-            # Gráfica de líneas (barras agrupadas en Excel para tendencia)
-            chart_row_start = row_start + 2
-            chart_row_end   = chart_row_start + len(serie) - 1
-            n_prods = len([p for p in PRODUCT_ORDER if p in serie.columns])
+            chart_row_end = row_start + 1 + len(serie)
 
+            # ── Gráfica de barras apiladas (tendencia semanal por producto) ──
             chart = BarChart()
             chart.type = "col"
             chart.grouping = "stacked"
             chart.overlap = 100
-            chart.title  = "Tendencia Semanal por Producto"
+            chart.title  = "Tendencia Semanal por Producto (barras apiladas)"
             chart.y_axis.title = "$MXN (sin IVA)"
             chart.x_axis.title = "Semana"
+            chart.x_axis.tickLblPos = "nextTo"
+            chart.y_axis.tickLblPos = "nextTo"
             chart.style = 10
-            chart.width = 24
-            chart.height = 12
+            chart.width = 26
+            chart.height = 13
 
-            cats = Reference(ws, min_col=1, min_row=chart_row_start, max_row=chart_row_end)
-            for ci in range(2, 2 + n_prods):
+            cats = Reference(ws, min_col=1, min_row=row_start + 2, max_row=chart_row_end)
+            for idx_p, p in enumerate(prods_presentes):
+                ci = 2 + idx_p
                 data = Reference(ws, min_col=ci, min_row=row_start + 1, max_row=chart_row_end)
                 series_obj = BarChart()
                 series_obj.add_data(data, titles_from_data=True)
-                chart.append(series_obj.series[0])
-
+                s = series_obj.series[0]
+                color_hex = PRODUCT_COLORS.get(p, "#999999").lstrip("#")
+                s.graphicalProperties.solidFill = color_hex
+                chart.append(s)
             chart.set_categories(cats)
-            ws.add_chart(chart, f"A{chart_row_end + 3}")
+            _add_chart_with_note(ws, chart, f"A{chart_row_end + 3}")
+
+            # ── Tabla de clasificación de tendencia ──────────────────────────
+            trend_start = chart_row_end + 20
+            ws.merge_cells(f"A{trend_start}:F{trend_start}")
+            ws[f"A{trend_start}"] = "Clasificación de Tendencia por Producto (1ª vs 2ª mitad de las últimas 12 semanas)"
+            ws[f"A{trend_start}"].font = FONT_SECTION
+            ws[f"A{trend_start}"].fill = FILL_CREAM
+
+            _header_row(ws, trend_start + 1,
+                        ["Producto", "Promedio 1ª Mitad $", "Promedio 2ª Mitad $",
+                         "Variación %", "Tendencia"], start_col=1)
+
+            # Calcular 1ª vs 2ª mitad
+            n_rows_serie = len(serie)
+            mid = n_rows_serie // 2
+            for tr, p in enumerate(prods_presentes, trend_start + 2):
+                if p not in serie.columns:
+                    continue
+                vals_prod = serie[p].tolist()
+                primera   = sum(vals_prod[:mid]) / max(mid, 1)
+                segunda   = sum(vals_prod[mid:]) / max(len(vals_prod) - mid, 1)
+                var_tend  = ((segunda - primera) / primera * 100) if primera > 0 else 0
+                if var_tend > 5:
+                    tend_label = "Ascendente"
+                    tend_fill  = _fill("1E7145")
+                    tend_font  = _font(bold=True, color="FFFFFF", size=9)
+                elif var_tend < -5:
+                    tend_label = "Descendente"
+                    tend_fill  = _fill("A6192E")
+                    tend_font  = _font(bold=True, color="FFFFFF", size=9)
+                else:
+                    tend_label = "Estable"
+                    tend_fill  = _fill("FFC000")
+                    tend_font  = _font(bold=True, color="1F1F1F", size=9)
+
+                row_vals = [
+                    PRODUCT_DISPLAY_NAMES.get(p, p),
+                    primera, segunda, var_tend / 100, tend_label
+                ]
+                _data_row(ws, tr, row_vals)
+                ws.cell(row=tr, column=2).number_format = FMT_CURRENCY
+                ws.cell(row=tr, column=3).number_format = FMT_CURRENCY
+                ws.cell(row=tr, column=4).number_format = FMT_PCT1
+                # Colorear celda Tendencia con fondo completo
+                ws.cell(row=tr, column=5).fill = tend_fill
+                ws.cell(row=tr, column=5).font = tend_font
+                ws.cell(row=tr, column=5).alignment = _align("center")
 
         # Anchos
-        for i, w in enumerate([20, 16, 12, 12, 16, 12, 14], 1):
+        for i, w in enumerate([22, 16, 16, 14, 18, 14], 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
     # ------------------------------------------------------------------
@@ -514,58 +741,157 @@ class LocoReporteXLSX:
         ws = self.wb.create_sheet("Por Cliente")
         ws.sheet_view.showGridLines = False
 
-        ws.merge_cells("A1:H1")
-        ws["A1"] = "Análisis por Cliente — Concentración y Tendencia"
+        ws.merge_cells("A1:I1")
+        ws["A1"] = "Análisis por Cliente — Concentración de Cartera y Segmentación"
         ws["A1"].font = FONT_TITLE
         ws["A1"].alignment = _align("left")
         ws["A1"].fill = _fill("FFF8F0")
 
         top_clientes = self.proc.get_top_clientes(mode="anual")
         det_df = self.proc.get_detalle_clientes(top_clientes, mode="anual")
+        total_global = det_df["Total"].sum() if not det_df.empty else 1
 
-        ws.merge_cells("A3:H3")
-        ws["A3"] = f"Top {len(top_clientes)} Clientes — Ventas YTD por Producto"
+        # ── BLOQUE 1: Concentración de cartera ──────────────────────────
+        ws.merge_cells("A3:E3")
+        ws["A3"] = "Concentración de Cartera"
         ws["A3"].font = FONT_SECTION
         ws["A3"].fill = FILL_CREAM
 
-        cols = ["Cliente"] + [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER] + ["Total $", "Part %"]
-        _header_row(ws, 4, cols)
+        # Calcular concentración
+        all_cli = self.proc.get_detalle_clientes(
+            self.proc.get_top_clientes(mode="anual"), mode="anual"
+        )
+        sorted_cli = all_cli.sort_values("Total", ascending=False)
+        total_todos = sorted_cli["Total"].sum() or 1
+        n_top5  = max(1, int(len(sorted_cli) * 0.05))
+        n_top10 = max(1, int(len(sorted_cli) * 0.10))
+        pct_top5  = sorted_cli.head(n_top5)["Total"].sum() / total_todos * 100
+        pct_top10 = sorted_cli.head(n_top10)["Total"].sum() / total_todos * 100
+        n_activos = len(sorted_cli)
 
-        total_global = det_df["Total"].sum() if not det_df.empty else 1
+        conc_metrics = [
+            (f"% Ventas — Top 5% clientes ({n_top5} clientes)",  pct_top5,  True),
+            (f"% Ventas — Top 10% clientes ({n_top10} clientes)", pct_top10, True),
+            ("# Clientes activos en el período",                   n_activos, False),
+        ]
+        _header_row(ws, 4, ["Métrica de Concentración", "Valor", "Señal"])
+        for ri, (label, valor, es_riesgo) in enumerate(conc_metrics, 5):
+            is_num = isinstance(valor, float)
+            cell_v = ws.cell(row=ri, column=2, value=valor / 100 if is_num else valor)
+            if is_num:
+                cell_v.number_format = FMT_PCT1
+            ws.cell(row=ri, column=1, value=label).font = FONT_BODY
+            ws.cell(row=ri, column=1).alignment = _align("left")
+            ws.cell(row=ri, column=1).border = BORDER
+            cell_v.border = BORDER
+            cell_v.alignment = _align("right")
+            # Color riesgo si concentración > 40%
+            if es_riesgo and is_num and valor > 40:
+                cell_v.font = _font(bold=True, color=TRAFFIC_RED, size=10)
+                ws.cell(row=ri, column=3, value="⚠ Concentración alta").font = _font(bold=True, color=TRAFFIC_RED, size=9)
+            else:
+                cell_v.font = _font(bold=True, color=BRAND_MAROON, size=10)
+                ws.cell(row=ri, column=3, value="OK").font = _font(color=TRAFFIC_GREEN, size=9)
+            ws.cell(row=ri, column=3).border = BORDER
 
-        for ri, (idx, row) in enumerate(det_df.iterrows(), 5):
-            tv   = row["Total"]
-            pct  = tv / total_global * 100 if total_global > 0 else 0
-            vals = [str(idx)[:30]] + [row[p] for p in PRODUCT_ORDER if p in row.index] + [tv, pct / 100]
+        # Nota de lectura
+        ws.merge_cells("A8:E8")
+        ws["A8"] = "Nota: Concentración > 40% en top 10% de clientes representa riesgo de cartera. Diversificar."
+        ws["A8"].font = FONT_SUB
+
+        # ── BLOQUE 2: Ranking Top clientes con Pareto ────────────────────
+        rank_start = 10
+        ws.merge_cells(f"A{rank_start}:J{rank_start}")
+        ws[f"A{rank_start}"] = f"Ranking Top {len(top_clientes)} Clientes — Ventas YTD (con Curva Pareto)"
+        ws[f"A{rank_start}"].font = FONT_SECTION
+        ws[f"A{rank_start}"].fill = FILL_CREAM
+
+        cols = ["#", "Cliente"] + [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER] + ["Total $", "Part %", "% Acumulado"]
+        _header_row(ws, rank_start + 1, cols)
+
+        acumulado = 0.0
+        for ri, (idx, row) in enumerate(det_df.iterrows(), rank_start + 2):
+            tv    = row["Total"]
+            pct   = tv / total_global * 100 if total_global > 0 else 0
+            acumulado += pct
+            vals  = [ri - (rank_start + 1), str(idx)[:30]]
+            vals += [row[p] for p in PRODUCT_ORDER if p in row.index]
+            vals += [tv, pct / 100, acumulado / 100]
             _data_row(ws, ri, vals)
-            for ci in range(2, len(PRODUCT_ORDER) + 2):
+            ncols = len(PRODUCT_ORDER)
+            for ci in range(3, ncols + 3):
                 ws.cell(row=ri, column=ci).number_format = FMT_CURRENCY
-            ws.cell(row=ri, column=len(PRODUCT_ORDER) + 2).number_format = FMT_CURRENCY
-            ws.cell(row=ri, column=len(PRODUCT_ORDER) + 3).number_format = FMT_PCT1
+            ws.cell(row=ri, column=ncols + 3).number_format = FMT_CURRENCY
+            ws.cell(row=ri, column=ncols + 4).number_format = FMT_PCT1
+            ws.cell(row=ri, column=ncols + 5).number_format = FMT_PCT1
 
         # Fila total
-        tot_r = 5 + len(det_df)
-        total_row = ["Total"] + [det_df[p].sum() if p in det_df.columns else 0 for p in PRODUCT_ORDER] + [total_global, 1.0]
+        tot_r = rank_start + 2 + len(det_df)
+        total_row = ["—", "Total"]
+        total_row += [det_df[p].sum() if p in det_df.columns else 0 for p in PRODUCT_ORDER]
+        total_row += [total_global, 1.0, 1.0]
         _data_row(ws, tot_r, total_row, bold=True, cream=True)
-        for ci in range(2, len(PRODUCT_ORDER) + 3):
+        ncols = len(PRODUCT_ORDER)
+        for ci in range(3, ncols + 4):
             ws.cell(row=tot_r, column=ci).number_format = FMT_CURRENCY
-        ws.cell(row=tot_r, column=len(PRODUCT_ORDER) + 3).number_format = FMT_PCT1
 
-        # Concentración
-        conc_row = tot_r + 3
-        ws.merge_cells(f"A{conc_row}:D{conc_row}")
-        ws[f"A{conc_row}"] = "Concentración de Ingresos (Top Clientes)"
-        ws[f"A{conc_row}"].font = FONT_SECTION
-        ws[f"A{conc_row}"].fill = FILL_CREAM
+        # ── BLOQUE 3: Clientes en riesgo y en crecimiento ────────────────
+        seg = self.proc.get_clientes_riesgo_crecimiento()
+        df_riesgo = seg["riesgo"]
+        df_crec   = seg["crecimiento"]
 
-        pct_top = det_df["Total"].sum() / total_global * 100 if not det_df.empty else 0
-        ws.cell(row=conc_row + 1, column=1, value="% del ingreso total en top clientes")
-        ws.cell(row=conc_row + 1, column=2, value=pct_top / 100).number_format = FMT_PCT1
-        ws.cell(row=conc_row + 1, column=2).font = _font(bold=True, color=BRAND_MAROON, size=12)
+        riesgo_start = tot_r + 3
+        ws.merge_cells(f"A{riesgo_start}:F{riesgo_start}")
+        ws[f"A{riesgo_start}"] = f"Clientes en Riesgo (caída ≥ 20% vs mismo período año anterior) — {len(df_riesgo)} clientes"
+        ws[f"A{riesgo_start}"].font = FONT_SECTION
+        ws[f"A{riesgo_start}"].fill = _fill("FDECEA")  # fondo rosado suave
+
+        _header_row(ws, riesgo_start + 1,
+                    ["Cliente", "Venta Actual $", "Venta Anterior $", "Var $", "Var %"])
+        if df_riesgo.empty:
+            ws.cell(row=riesgo_start + 2, column=1, value="Sin clientes en riesgo en este período.").font = FONT_SUB
+        else:
+            for ri2, (idx, row) in enumerate(df_riesgo.iterrows(), riesgo_start + 2):
+                _data_row(ws, ri2, [
+                    str(idx)[:35],
+                    row["venta_actual"],
+                    row["venta_anterior"],
+                    row["variacion_abs"],
+                    row["variacion_pct"] / 100
+                ], neg_cols=[4, 5])
+                for ci, fmt in [(2, FMT_CURRENCY), (3, FMT_CURRENCY),
+                                 (4, FMT_CURRENCY), (5, FMT_PCT1)]:
+                    ws.cell(row=ri2, column=ci).number_format = fmt
+                ws.cell(row=ri2, column=5).font = FONT_NEG
+
+        crec_section_start = riesgo_start + 3 + max(len(df_riesgo), 1)
+        ws.merge_cells(f"A{crec_section_start}:F{crec_section_start}")
+        ws[f"A{crec_section_start}"] = f"Clientes en Crecimiento (incremento ≥ 15% vs mismo período año anterior) — {len(df_crec)} clientes"
+        ws[f"A{crec_section_start}"].font = FONT_SECTION
+        ws[f"A{crec_section_start}"].fill = _fill("E8F5E9")  # fondo verde suave
+
+        _header_row(ws, crec_section_start + 1,
+                    ["Cliente", "Venta Actual $", "Venta Anterior $", "Var $", "Var %"])
+        if df_crec.empty:
+            ws.cell(row=crec_section_start + 2, column=1, value="Sin clientes en crecimiento en este período.").font = FONT_SUB
+        else:
+            for ri3, (idx, row) in enumerate(df_crec.iterrows(), crec_section_start + 2):
+                _data_row(ws, ri3, [
+                    str(idx)[:35],
+                    row["venta_actual"],
+                    row["venta_anterior"],
+                    row["variacion_abs"],
+                    row["variacion_pct"] / 100
+                ])
+                for ci, fmt in [(2, FMT_CURRENCY), (3, FMT_CURRENCY),
+                                 (4, FMT_CURRENCY), (5, FMT_PCT1)]:
+                    ws.cell(row=ri3, column=ci).number_format = fmt
+                ws.cell(row=ri3, column=5).font = _font(bold=True, color=TRAFFIC_GREEN, size=9)
 
         # Anchos
-        ws.column_dimensions["A"].width = 30
-        for i in range(2, len(PRODUCT_ORDER) + 4):
+        ws.column_dimensions["A"].width = 4
+        ws.column_dimensions["B"].width = 32
+        for i in range(3, len(PRODUCT_ORDER) + 6):
             ws.column_dimensions[get_column_letter(i)].width = 14
 
     # ------------------------------------------------------------------
@@ -576,60 +902,235 @@ class LocoReporteXLSX:
         ws = self.wb.create_sheet("Regional")
         ws.sheet_view.showGridLines = False
 
-        ws.merge_cells("A1:F1")
-        ws["A1"] = "Análisis Regional — Ventas por Estado"
+        ws.merge_cells("A1:H1")
+        ws["A1"] = "Análisis Regional — Ventas por Estado (YTD vs Año Anterior)"
         ws["A1"].font = FONT_TITLE
         ws["A1"].alignment = _align("left")
         ws["A1"].fill = _fill("FFF8F0")
 
-        df_reg = self.proc.get_analisis_regional(mode="anual")
+        # Obtener año actual y anterior con participaciones
+        y, w = self.proc.anio, self.proc.semana
+        ly, lyw = y - 1, w
 
-        ws.merge_cells("A3:F3")
-        ws["A3"] = "Ranking de Estados — YTD"
+        df_cur = self.proc._filter_ytd(y, w)
+        df_ly  = self.proc._filter_ytd(ly, lyw)
+
+        agg_cur = (
+            df_cur.groupby("region_o_estado")
+            .agg(unidades=("botellas", "sum"), venta_actual=("venta_sin_impuestos", "sum"))
+            .reset_index()
+        )
+        agg_ly = (
+            df_ly.groupby("region_o_estado")["venta_sin_impuestos"]
+            .sum().reset_index().rename(columns={"venta_sin_impuestos": "venta_anterior"})
+        )
+        df_reg = agg_cur.merge(agg_ly, on="region_o_estado", how="outer").fillna(0)
+        total_cur = df_reg["venta_actual"].sum() or 1
+        total_ly  = df_reg["venta_anterior"].sum() or 1
+        df_reg["pct_actual"]   = df_reg["venta_actual"]   / total_cur * 100
+        df_reg["pct_anterior"] = df_reg["venta_anterior"] / total_ly  * 100
+        df_reg["var_pp"]       = df_reg["pct_actual"] - df_reg["pct_anterior"]
+        df_reg = df_reg.sort_values("venta_actual", ascending=False).reset_index(drop=True)
+
+        ws.merge_cells("A3:H3")
+        ws["A3"] = f"Ventas por Estado — YTD {y} vs {ly} (hasta S{w:02d})"
         ws["A3"].font = FONT_SECTION
         ws["A3"].fill = FILL_CREAM
 
-        _header_row(ws, 4, ["#", "Estado / Región", "Ventas Netas $", "Botellas", "Participación %"])
+        _header_row(ws, 4, [
+            "#", "Estado / Región",
+            f"Venta {y} $", f"Venta {ly} $",
+            f"Part% {y}", f"Part% {ly}",
+            "Var pp"
+        ])
 
-        total_v = df_reg["ventas"].sum()
+        last_data_row = 4 + len(df_reg)
         for ri, (_, row) in enumerate(df_reg.iterrows(), 5):
-            pct_v = row["ventas"] / total_v if total_v > 0 else 0
-            _data_row(ws, ri, [ri - 4, row["region_o_estado"],
-                                row["ventas"], row["botellas"], pct_v])
+            var_pp = row["var_pp"]
+            _data_row(ws, ri, [
+                ri - 4,
+                row["region_o_estado"],
+                row["venta_actual"],
+                row["venta_anterior"],
+                row["pct_actual"]   / 100,
+                row["pct_anterior"] / 100,
+                var_pp / 100
+            ])
             ws.cell(row=ri, column=3).number_format = FMT_CURRENCY
-            ws.cell(row=ri, column=4).number_format = FMT_INT
+            ws.cell(row=ri, column=4).number_format = FMT_CURRENCY
             ws.cell(row=ri, column=5).number_format = FMT_PCT1
+            ws.cell(row=ri, column=6).number_format = FMT_PCT1
+            ws.cell(row=ri, column=7).number_format = "0.0pp"
+            # Colorear variación pp: verde si ganó participación, rojo si perdió
+            pp_cell = ws.cell(row=ri, column=7)
+            if var_pp > 0:
+                pp_cell.font = _font(bold=True, color=TRAFFIC_GREEN, size=9)
+            elif var_pp < 0:
+                pp_cell.font = _font(bold=True, color=TRAFFIC_RED, size=9)
 
-        # Formateo condicional (data bar) en ventas
-        last_row = 4 + len(df_reg)
+        # DataBar en ventas año actual
         ws.conditional_formatting.add(
-            f"C5:C{last_row}",
+            f"C5:C{last_data_row}",
             DataBarRule(start_type="min", end_type="max",
                         color=BRAND_MAROON.lstrip("#"))
         )
 
-        # Gráfica barras horizontales (top 15)
+        # Gráfica barras horizontales (top 15) — actual vs anterior
         chart = BarChart()
         chart.type = "bar"  # horizontal
-        chart.title = "Top Regiones — Ventas Netas ($MXN)"
-        chart.y_axis.title = "Estado"
-        chart.x_axis.title = "$MXN sin IVA"
-        chart.width = 22
-        chart.height = 14
+        chart.grouping = "clustered"
+        chart.title = f"Ventas por Estado: {y} vs {ly}"
+        chart.x_axis.title = "Estado"          # TextAxis (categorías / estados)
+        chart.y_axis.title = "$MXN sin IVA"    # NumericAxis (valores)
+        chart.width = 24
+        chart.height = 15
         chart.style = 10
 
         n_rows = min(15, len(df_reg))
-        data  = Reference(ws, min_col=3, min_row=4, max_row=4 + n_rows)
-        cats  = Reference(ws, min_col=2, min_row=5, max_row=4 + n_rows)
+        data = Reference(ws, min_col=3, max_col=4, min_row=4, max_row=4 + n_rows)
+        cats = Reference(ws, min_col=2, min_row=5, max_row=4 + n_rows)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
-        ws.add_chart(chart, f"G3")
 
-        for i, w in enumerate([5, 28, 18, 12, 14], 1):
-            ws.column_dimensions[get_column_letter(i)].width = w
+        # Ordenar para que el estado #1 aparezca arriba y etiquetas visibles
+        chart.x_axis.scaling.orientation = "maxMin"
+        chart.y_axis.crosses = "min"
+        chart.x_axis.tickLblPos = "nextTo"
+        chart.y_axis.tickLblPos = "nextTo"
+
+        # Colores de marca Design.md: Año actual Maroon #6E1E28, Año anterior Khaki #E7D6A6
+        if len(chart.series) > 0:
+            chart.series[0].graphicalProperties.solidFill = "6E1E28"
+        if len(chart.series) > 1:
+            chart.series[1].graphicalProperties.solidFill = "E7D6A6"
+
+        _add_chart_with_note(ws, chart, "I3")
+
+        for i, w_col in enumerate([5, 28, 18, 18, 12, 12, 10], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w_col
 
     # ------------------------------------------------------------------
-    # Hoja 6: Oportunidades y Riesgos
+    # Hoja 6: Por Canal (nueva hoja separada)
+    # ------------------------------------------------------------------
+
+    def _sheet_canal(self):
+        ws = self.wb.create_sheet("Por Canal")
+        ws.sheet_view.showGridLines = False
+
+        y, w = self.proc.anio, self.proc.semana
+        ly = y - 1
+
+        ws.merge_cells("A1:H1")
+        ws["A1"] = f"Análisis por Canal — YTD {y} vs {ly} (hasta S{w:02d})"
+        ws["A1"].font = FONT_TITLE
+        ws["A1"].alignment = _align("left")
+        ws["A1"].fill = _fill("FFF8F0")
+
+        df_canal = self.proc.get_canal_analisis(mode="anual")
+
+        ws.merge_cells("A3:H3")
+        ws["A3"] = f"Ventas por Canal de Distribución — {y} vs {ly}"
+        ws["A3"].font = FONT_SECTION
+        ws["A3"].fill = FILL_CREAM
+
+        _header_row(ws, 4, [
+            "Canal",
+            f"Unidades {y}",
+            f"Venta {y} $",
+            f"Venta {ly} $",
+            f"Part% {y}",
+            f"Part% {ly}",
+            "Var pp"
+        ])
+
+        for ri, (_, row) in enumerate(df_canal.iterrows(), 5):
+            var_pp = row["var_pp"]
+            _data_row(ws, ri, [
+                row["canal"],
+                row["unidades"],
+                row["venta_actual"],
+                row["venta_anterior"],
+                row["pct_part_actual"]   / 100,
+                row["pct_part_anterior"] / 100,
+                var_pp / 100
+            ])
+            ws.cell(row=ri, column=2).number_format = FMT_INT
+            ws.cell(row=ri, column=3).number_format = FMT_CURRENCY
+            ws.cell(row=ri, column=4).number_format = FMT_CURRENCY
+            ws.cell(row=ri, column=5).number_format = FMT_PCT1
+            ws.cell(row=ri, column=6).number_format = FMT_PCT1
+            ws.cell(row=ri, column=7).number_format = "0.0pp"
+            # Variación pp de canal: sin color (consistente con archivo original)
+
+        # Fila total
+        tot_r = 5 + len(df_canal)
+        _data_row(ws, tot_r, [
+            "Total",
+            df_canal["unidades"].sum(),
+            df_canal["venta_actual"].sum(),
+            df_canal["venta_anterior"].sum(),
+            1.0, 1.0, 0.0
+        ], bold=True, cream=True)
+        ws.cell(row=tot_r, column=2).number_format = FMT_INT
+        ws.cell(row=tot_r, column=3).number_format = FMT_CURRENCY
+        ws.cell(row=tot_r, column=4).number_format = FMT_CURRENCY
+        ws.cell(row=tot_r, column=5).number_format = FMT_PCT1
+        ws.cell(row=tot_r, column=6).number_format = FMT_PCT1
+
+        # ── Gráfica: Barras agrupadas por canal (año actual vs anterior) ──────
+        try:
+            chart = BarChart()
+            chart.type = "bar"
+            chart.grouping = "clustered"
+            chart.title = f"Ventas por Canal: {y} vs {ly}"
+            chart.x_axis.title = "Canal"            # TextAxis (Categorías / Canales)
+            chart.y_axis.title = "$MXN sin IVA"      # NumericAxis (Valores en Pesos)
+            chart.x_axis.scaling.orientation = "maxMin"
+            chart.y_axis.crosses = "min"
+            chart.x_axis.tickLblPos = "nextTo"
+            chart.y_axis.tickLblPos = "nextTo"
+            chart.width = 24
+            chart.height = 14
+            chart.style = 10
+
+            n_canales = len(df_canal)
+            data = Reference(ws, min_col=3, max_col=4,
+                             min_row=4, max_row=4 + n_canales)
+            cats = Reference(ws, min_col=1, min_row=5, max_row=4 + n_canales)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+
+            # Colores de marca Design.md: Año actual Maroon #6E1E28, Año anterior Khaki #E7D6A6
+            if len(chart.series) > 0:
+                chart.series[0].graphicalProperties.solidFill = "6E1E28"
+            if len(chart.series) > 1:
+                chart.series[1].graphicalProperties.solidFill = "E7D6A6"
+
+            _add_chart_with_note(ws, chart, "I3")
+        except Exception:
+            pass
+
+        # ── Tabla secundaria simplificada — alimenta la gráfica Pareto ───
+        row_pareto = tot_r + 3
+        ws.merge_cells(f"A{row_pareto}:D{row_pareto}")
+        ws[f"A{row_pareto}"] = "Mix de Canal — Tabla Simplificada"
+        ws[f"A{row_pareto}"].font = FONT_SECTION
+        ws[f"A{row_pareto}"].fill = FILL_CREAM
+        _header_row(ws, row_pareto + 1, ["Canal", f"Venta {y} $", f"Part% {y}"])
+        for ri2, (_, row) in enumerate(df_canal.iterrows(), row_pareto + 2):
+            _data_row(ws, ri2, [
+                row["canal"],
+                row["venta_actual"],
+                row["pct_part_actual"] / 100
+            ])
+            ws.cell(row=ri2, column=2).number_format = FMT_CURRENCY
+            ws.cell(row=ri2, column=3).number_format = FMT_PCT1
+
+        for i, w_col in enumerate([28, 14, 18, 18, 12, 12, 10], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w_col
+
+    # ------------------------------------------------------------------
+    # Hoja 7: Oportunidades y Riesgos
     # ------------------------------------------------------------------
 
     def _sheet_oportunidades(self):
@@ -651,13 +1152,30 @@ class LocoReporteXLSX:
 
         items = self.proc.get_oportunidades_riesgos()
         for ri, item in enumerate(items, 5):
-            tipo_color = TRAFFIC_RED if item["tipo"] == "Riesgo" else (
-                TRAFFIC_GREEN if item["tipo"] == "Oportunidad" else TRAFFIC_YELLOW)
+            # Color de fondo COMPLETO en columna Tipo (fondo + texto blanco)
+            tipo = item["tipo"]
+            if tipo == "Riesgo":
+                tipo_fill = _fill("A6192E")
+                tipo_font = _font(bold=True, color="FFFFFF", size=9)
+            elif tipo == "Oportunidad":
+                tipo_fill = _fill("1E7145")
+                tipo_font = _font(bold=True, color="FFFFFF", size=9)
+            elif tipo in ("Riesgo / Oportunidad", "Riesgo-Oportunidad"):
+                tipo_fill = _fill("8A6D00")
+                tipo_font = _font(bold=True, color="FFFFFF", size=9)
+            else:
+                tipo_fill = FILL_HEADER2
+                tipo_font = FONT_BODY
+
             vals = [ri - 4, item["hallazgo"], item["tipo"], item["impacto"], item["recomendacion"]]
             _data_row(ws, ri, vals)
-            ws.cell(row=ri, column=3).font = _font(bold=True, color=tipo_color, size=9)
+            ws.cell(row=ri, column=3).fill = tipo_fill
+            ws.cell(row=ri, column=3).font = tipo_font
+            ws.cell(row=ri, column=3).alignment = _align("center")
             for ci in range(1, 6):
                 ws.cell(row=ri, column=ci).alignment = _align("left", wrap=True)
+            ws.cell(row=ri, column=3).alignment = _align("center", wrap=False)
+            ws.row_dimensions[ri].height = 28
 
         # Conclusiones
         conc_row = 5 + len(items) + 2
@@ -785,6 +1303,8 @@ class LocoReporteXLSX:
             chart.grouping = "clustered"
             chart.title = f"Ventas por Producto: {label_a} vs {label_b}"
             chart.y_axis.title = "$MXN sin IVA"
+            chart.x_axis.tickLblPos = "nextTo"
+            chart.y_axis.tickLblPos = "nextTo"
             chart.width = 22
             chart.height = 12
             chart.style = 10
@@ -795,7 +1315,7 @@ class LocoReporteXLSX:
                                   min_row=row + 2, max_row=last_prod_row)
             chart.add_data(data_ref, titles_from_data=True)
             chart.set_categories(cats_ref)
-            ws.add_chart(chart, f"G{row}")
+            _add_chart_with_note(ws, chart, f"G{row}")
             next_section = last_prod_row + 16
         else:
             next_section = row + 4
@@ -878,9 +1398,17 @@ class LocoReporteXLSX:
             # Fuentes
             if contexto.get("fuentes"):
                 src_row = row + 2 + len(contexto["hallazgos"]) + 2
-                ws.cell(row=src_row, column=1, value="Fuentes consultadas:").font = FONT_SECTION
-                for i, fuente in enumerate(contexto["fuentes"], src_row + 1):
-                    ws.cell(row=i, column=1, value=fuente).font = FONT_SUB
+                ws.merge_cells(f"A{src_row}:E{src_row}")
+                ws[f"A{src_row}"] = "Fuentes consultadas:"
+                ws[f"A{src_row}"].font = FONT_SECTION
+                ws[f"A{src_row}"].fill = FILL_CREAM
+
+                for idx_src, fuente in enumerate(contexto["fuentes"], src_row + 1):
+                    ws.merge_cells(f"A{idx_src}:E{idx_src}")
+                    ws[f"A{idx_src}"] = f"•  {fuente}"
+                    ws[f"A{idx_src}"].font = FONT_BODY
+                    ws[f"A{idx_src}"].alignment = _align("left", wrap=True)
+                    ws.row_dimensions[idx_src].height = 20
 
         for i, w in enumerate([5, 45, 14, 24, 40], 1):
             ws.column_dimensions[get_column_letter(i)].width = w
@@ -911,6 +1439,7 @@ def generate_xlsx(
     gen._sheet_productos()
     gen._sheet_clientes()
     gen._sheet_regional()
+    gen._sheet_canal()
     gen._sheet_oportunidades()
 
     # Hojas opcionales
@@ -924,5 +1453,10 @@ def generate_xlsx(
         gen._sheet_contexto_mercado({"disponible": False,
                                       "resumen": "", "fuentes": [], "hallazgos": []})
 
-    gen.wb.save(output_path)
-    print(f"[XLSX] Guardado: {output_path}")
+    try:
+        gen.wb.save(output_path)
+        print(f"[XLSX] Guardado: {output_path}")
+    except PermissionError:
+        alt_path = output_path.replace(".xlsx", "_actualizado.xlsx")
+        gen.wb.save(alt_path)
+        print(f"[XLSX] ⚠️ El archivo original está abierto en Excel. Guardado copia en: {alt_path}")
