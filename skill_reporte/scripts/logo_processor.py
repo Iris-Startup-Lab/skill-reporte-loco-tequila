@@ -5,6 +5,8 @@ Procesa el logo SVG de Loco Tequila para:
   1. Generar version blanca (todos los fills -> #FFFFFF, bg transparente)
   2. Convertir SVG a PNG (para ReportLab PDF)
   3. Devolver SVG inline para el HTML
+Esto es necesario para que el agente pueda asociarlo a 
+los diferentes documentos existentes en el PDF y en HMTL.
 
 El SVG original usa ~330 clases CSS con variantes de rojo/maroon.
 La version blanca reemplaza todos los fills de color con #FFFFFF y

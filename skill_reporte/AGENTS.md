@@ -185,3 +185,11 @@ Al finalizar cualquier modificación en el código:
   - [ ] Recálculo de KPIs superiores y redibujo de las 5 gráficas Chart.js.
   - [ ] Descargar CSV (verificar marca BOM UTF-8 en Excel).
   - [ ] Descargar imagen PNG de cualquier gráfica.
+  - [ ] **Líneas de comparación:** "Ventas Netas Semanales" muestra **una** línea
+        gris punteada (año anterior) y "Ventas por Producto por Semana" muestra
+        **dos** (plan en rojo + año anterior en gris). Verificar que la línea gris
+        **no** se apile sobre las barras y que se corte (no caiga a cero) en las
+        semanas sin histórico, p. ej. 2022 cuando no hay datos de 2021.
+  - [ ] **Modal de gráfica:** el botón "⛶ Ampliar" de cada tarjeta abre la gráfica
+        en pop-up; cierra con "✕ Cerrar", `Esc` y clic en el fondo. Con el modal
+        abierto, cambiar un filtro debe refrescar la gráfica ampliada.

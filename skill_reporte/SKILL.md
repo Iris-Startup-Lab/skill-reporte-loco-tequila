@@ -456,6 +456,27 @@ SKU, de 9 columnas) **no cambian**. `_build_rl_table` admite `label_col`,
   una sola vez en `generate_report.py` y se pasa tanto a XLSX como a HTML.
 - **Filtro Cliente:** es un **listado desplegable** (`<select>`, ordenado
   alfabéticamente) como los demás filtros, no una búsqueda por texto.
+- **Línea de año anterior (gris):** "Ventas Netas Semanales" lleva **una sola**
+  línea gris punteada y "Ventas por Producto por Semana" lleva **dos** líneas
+  (Plan en rojo + Año Anterior en gris). El gris (`CHART_LASTYEAR_LINE`) es
+  deliberadamente discreto para no robar foco a las barras. La serie se alinea
+  por etiqueta del eje X: `2026-W30` toma el valor de `2025-W30`; las semanas sin
+  histórico van en `null` para que la línea se **corte** en vez de caer a cero.
+  Respeta los filtros de Producto, Canal, Estado y Cliente.
+- **Línea de plan filtrada:** `plan_detail` lleva el plan desglosado por producto
+  y canal, de modo que la línea roja respeta esos dos filtros. El plan de origen
+  **no trae Estado ni Cliente**, así que esos filtros no lo afectan (igual que el
+  KPI "Plan Est.").
+- **Stacking de las líneas:** cada dataset de línea lleva su propio `stack`
+  (`'plan'` / `'ly'`). En gráficas con eje Y apilado, Chart.js agrupa por
+  `stack || type`; sin ese id las dos líneas se sumarían entre sí.
+- **Modal "⛶ Ampliar":** cada una de las 5 gráficas tiene, junto al botón PNG, un
+  botón que abre la gráfica a pantalla casi completa con botón **✕ Cerrar**
+  (también cierra con `Esc` o clic en el fondo). Las gráficas se construyen desde
+  `chartFactories[key]()`, que devuelve datasets **nuevos** en cada llamada: la
+  instancia del modal es independiente de la de la tarjeta (Chart.js muta los
+  objetos dataset, así que compartirlos rompe ambas). Si se cambian los filtros
+  con el modal abierto, este se refresca solo.
 
 ---
 

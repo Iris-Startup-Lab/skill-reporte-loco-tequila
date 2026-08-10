@@ -25,7 +25,7 @@ from design_tokens import (
     HEADER_TEXT, SECTION_SUBTITLE, NEG_VALUE, POS_VALUE,
     PRODUCT_ORDER, PRODUCT_DISPLAY_NAMES, PRODUCT_COLORS,
     CANAL_ORDER, CANAL_COLORS,
-    CHART_PLAN_LINE, CHART_LASTYEAR_AREA, CHART_GRID,
+    CHART_PLAN_LINE, CHART_LASTYEAR_AREA, CHART_LASTYEAR_LINE, CHART_GRID,
     fmt_currency, fmt_int,
 )
 from data_processor import LocoDataProcessor
@@ -107,6 +107,28 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
                 plan_map[k_full] = val
                 plan_map[k_sem]  = plan_map.get(k_sem, 0) + val
 
+    # Plan desglosado por producto y canal: permite que la línea de plan de las
+    # gráficas respete los filtros de Producto/Canal. El plan de origen no trae
+    # estado ni cliente, así que esos filtros no lo afectan.
+    plan_detail = []
+    if proc.dfp is not None and not proc.dfp.empty:
+        dfp = proc.dfp
+        needed = {"anio_num", "semana_num", "producto", "canal_norm",
+                  "plan_venta_sin_impuestos"}
+        if needed.issubset(set(dfp.columns)):
+            grp_d = dfp.groupby(
+                ["anio_num", "semana_num", "producto", "canal_norm"]
+            )["plan_venta_sin_impuestos"].sum().reset_index()
+            for _, r in grp_d.iterrows():
+                if pd.isna(r["anio_num"]) or pd.isna(r["semana_num"]):
+                    continue
+                plan_detail.append({
+                    "k": f"{int(r['anio_num'])}-W{int(r['semana_num']):02d}",
+                    "p": PRODUCT_DISPLAY_NAMES.get(r["producto"], r["producto"]),
+                    "c": r["canal_norm"],
+                    "v": round(float(r["plan_venta_sin_impuestos"]), 2),
+                })
+
     # Resumen ejecutivo inicial
     resumen = proc.get_resumen_ejecutivo()
 
@@ -146,6 +168,7 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
             "ticket": float(resumen["actual"]["ticket_promedio"]),
         },
         "plan_map": plan_map,
+        "plan_detail": plan_detail,
         "tabla": tabla_records,
         "oportunidades": oportunidades,
         "product_colors": {PRODUCT_DISPLAY_NAMES.get(k, k): v for k, v in PRODUCT_COLORS.items()},
@@ -368,6 +391,65 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       color: var(--brand-maroon);
       transform: translateY(-1px);
     }}
+    .chart-actions {{ display: flex; gap: 6px; align-items: center; flex-shrink: 0; }}
+
+    /* ── Modal de gráfica ampliada ── */
+    .chart-modal-overlay {{
+      position: fixed;
+      inset: 0;
+      background: rgba(30, 12, 15, 0.62);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 999;
+    }}
+    .chart-modal-overlay.open {{ display: flex; }}
+    .chart-modal {{
+      background: var(--card-bg);
+      border-radius: 12px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.38);
+      width: 100%;
+      max-width: 1280px;
+      max-height: 92vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }}
+    .chart-modal-head {{
+      background: var(--brand-maroon);
+      color: #fff;
+      padding: 12px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }}
+    .chart-modal-close {{
+      background: rgba(255,255,255,0.18);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.45);
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }}
+    .chart-modal-close:hover {{ background: #fff; color: var(--brand-maroon); }}
+    .chart-modal-body {{
+      padding: 18px;
+      background: #FFFFFF;
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }}
+    .chart-modal-canvas-wrap {{ position: relative; width: 100%; height: 72vh; }}
 
     /* ── Table ── */
     .table-card {{
@@ -520,9 +602,12 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       <div class="chart-title">
         <div>
           Ventas Netas Semanales ($MXN sin IVA)
-          <span class="chart-note">Las ventas no incluyen IVA, IEPS</span>
+          <span class="chart-note">Sin IVA ni IEPS · línea punteada = año anterior</span>
         </div>
-        <button class="btn-chart-img" onclick="downloadChartImage('semanal', 'Ventas_Semanales_y_Plan')">📷 PNG</button>
+        <div class="chart-actions">
+          <button class="btn-chart-img" onclick="downloadChartImage('semanal', 'Ventas_Semanales_y_Plan')">📷 PNG</button>
+          <button class="btn-chart-img" onclick="openChartModal('semanal')" title="Ver en grande">⛶ Ampliar</button>
+        </div>
       </div>
       <div class="chart-body"><canvas id="chartSemanal" height="160"></canvas></div>
     </div>
@@ -530,9 +615,12 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       <div class="chart-title">
         <div>
           Ventas por Producto por Semana
-          <span class="chart-note">Barras apiladas sin IVA</span>
+          <span class="chart-note">Barras apiladas sin IVA · líneas de plan y de año anterior</span>
         </div>
-        <button class="btn-chart-img" onclick="downloadChartImage('producto', 'Ventas_Por_Producto')">📷 PNG</button>
+        <div class="chart-actions">
+          <button class="btn-chart-img" onclick="downloadChartImage('producto', 'Ventas_Por_Producto')">📷 PNG</button>
+          <button class="btn-chart-img" onclick="openChartModal('producto')" title="Ver en grande">⛶ Ampliar</button>
+        </div>
       </div>
       <div class="chart-body"><canvas id="chartProducto" height="160"></canvas></div>
     </div>
@@ -543,14 +631,20 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     <div class="chart-card">
       <div class="chart-title">
         <div>Ranking de Productos</div>
-        <button class="btn-chart-img" onclick="downloadChartImage('ranking', 'Ranking_Productos')">📷 PNG</button>
+        <div class="chart-actions">
+          <button class="btn-chart-img" onclick="downloadChartImage('ranking', 'Ranking_Productos')">📷 PNG</button>
+          <button class="btn-chart-img" onclick="openChartModal('ranking')" title="Ver en grande">⛶ Ampliar</button>
+        </div>
       </div>
       <div class="chart-body"><canvas id="chartRanking" height="130"></canvas></div>
     </div>
     <div class="chart-card">
       <div class="chart-title">
         <div>Top Regiones / Estados por Ventas</div>
-        <button class="btn-chart-img" onclick="downloadChartImage('regional', 'Top_Regiones_Ventas')">📷 PNG</button>
+        <div class="chart-actions">
+          <button class="btn-chart-img" onclick="downloadChartImage('regional', 'Top_Regiones_Ventas')">📷 PNG</button>
+          <button class="btn-chart-img" onclick="openChartModal('regional')" title="Ver en grande">⛶ Ampliar</button>
+        </div>
       </div>
       <div class="chart-body"><canvas id="chartRegional" height="130"></canvas></div>
     </div>
@@ -564,7 +658,10 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
           Ventas por Canal por Semana
           <span class="chart-note">Sin IVA</span>
         </div>
-        <button class="btn-chart-img" onclick="downloadChartImage('canal', 'Ventas_Por_Canal')">📷 PNG</button>
+        <div class="chart-actions">
+          <button class="btn-chart-img" onclick="downloadChartImage('canal', 'Ventas_Por_Canal')">📷 PNG</button>
+          <button class="btn-chart-img" onclick="openChartModal('canal')" title="Ver en grande">⛶ Ampliar</button>
+        </div>
       </div>
       <div class="chart-body"><canvas id="chartCanal" height="110"></canvas></div>
     </div>
@@ -609,6 +706,20 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
   </div>
 </main>
 
+<!-- Modal de gráfica ampliada -->
+<div class="chart-modal-overlay" id="chartModalOverlay" onclick="handleModalBackdrop(event)"
+     role="dialog" aria-modal="true" aria-labelledby="chartModalTitle">
+  <div class="chart-modal">
+    <div class="chart-modal-head">
+      <span id="chartModalTitle">Gráfica</span>
+      <button class="chart-modal-close" onclick="closeChartModal()" aria-label="Cerrar">✕ Cerrar</button>
+    </div>
+    <div class="chart-modal-body">
+      <div class="chart-modal-canvas-wrap"><canvas id="chartModalCanvas"></canvas></div>
+    </div>
+  </div>
+</div>
+
 <footer>
   Loco Tequila · Dirección de Finanzas · Las ventas no incluyen IVA ni IEPS · Generado automáticamente
 </footer>
@@ -623,6 +734,30 @@ let sortCol = -1, sortAsc = true;
 let page = 1;
 const PAGE_SIZE = 50;
 let charts = {{}};
+
+// Fábricas de configuración: cada una devuelve un config NUEVO de Chart.js.
+// Esto permite instanciar la misma gráfica dos veces (tarjeta + modal) sin que
+// ambas instancias compartan los objetos dataset (Chart.js los muta).
+let chartFactories = {{}};
+
+const CHART_CANVAS = {{
+  semanal:  'chartSemanal',
+  producto: 'chartProducto',
+  ranking:  'chartRanking',
+  regional: 'chartRegional',
+  canal:    'chartCanal',
+}};
+
+const CHART_TITLES = {{
+  semanal:  'Ventas Netas Semanales ($MXN sin IVA)',
+  producto: 'Ventas por Producto por Semana',
+  ranking:  'Ranking de Productos',
+  regional: 'Top Regiones / Estados por Ventas',
+  canal:    'Ventas por Canal por Semana',
+}};
+
+let modalChart = null;
+let modalChartKey = null;
 
 // ── Inicialización ───────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {{
@@ -814,6 +949,96 @@ function renderKPIsDynamic(records) {{
 }}
 
 
+// ── Series de comparación (Año Anterior / Plan) ────────────────────────────
+
+// Índice de ventas por clave "AAAA-Wnn" respetando los filtros NO temporales
+// (Producto, Canal, Estado, Cliente). Base de la línea del año anterior.
+function buildYearIndex() {{
+  const p  = document.getElementById('fProducto').value;
+  const cv = document.getElementById('fCanal').value;
+  const e  = document.getElementById('fEstado').value;
+  const cl = document.getElementById('fCliente').value;
+
+  const idx = {{}};
+  DATA.tabla.forEach(r => {{
+    if (p  !== 'all' && r.producto_display !== p)  return;
+    if (cv !== 'all' && r.canal            !== cv) return;
+    if (e  !== 'all' && r.estado           !== e)  return;
+    if (cl !== 'all' && r.cliente          !== cl) return;
+    const k = `${{r.anio}}-W${{String(r.semana_num).padStart(2,'0')}}`;
+    idx[k] = (idx[k] || 0) + (r.venta_sin_iva || 0);
+  }});
+  return idx;
+}}
+
+// Serie del año inmediatamente anterior, alineada a las etiquetas del eje X:
+// "2026-W30" toma el valor de "2025-W30". Las semanas sin histórico quedan en
+// null para que la línea se corte en lugar de caer a cero.
+function lastYearSeries(weekLabels) {{
+  const idx = buildYearIndex();
+  return weekLabels.map(w => {{
+    const m = /^(\\d{{4}})[-_ ]?W(\\d{{1,2}})/.exec(String(w));
+    if (!m) return null;
+    const k = `${{Number(m[1]) - 1}}-W${{String(m[2]).padStart(2,'0')}}`;
+    return (k in idx) ? idx[k] : null;
+  }});
+}}
+
+// Serie de plan alineada al eje X. Respeta los filtros de Producto y Canal;
+// el plan de origen no trae Estado ni Cliente, por lo que esos no lo afectan.
+function planSeries(weekLabels) {{
+  const p  = document.getElementById('fProducto').value;
+  const cv = document.getElementById('fCanal').value;
+  const detail = DATA.plan_detail || [];
+
+  if (detail.length === 0 || (p === 'all' && cv === 'all')) {{
+    return weekLabels.map(w => DATA.plan_map[w] || 0);
+  }}
+
+  const idx = {{}};
+  detail.forEach(d => {{
+    if (p  !== 'all' && d.p !== p)  return;
+    if (cv !== 'all' && d.c !== cv) return;
+    idx[d.k] = (idx[d.k] || 0) + d.v;
+  }});
+  return weekLabels.map(w => idx[w] || 0);
+}}
+
+// Datasets de línea. Cada uno lleva su propio `stack` para que en gráficas
+// apiladas no se sumen entre sí ni con las barras.
+function planDataset(data) {{
+  return {{
+    label: 'Plan $',
+    data: data,
+    type: 'line',
+    stack: 'plan',
+    borderColor: '{CHART_PLAN_LINE}',
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    pointRadius: 3,
+    tension: 0.3,
+    order: 1,
+  }};
+}}
+
+function lastYearDataset(data) {{
+  return {{
+    label: 'Año Anterior $',
+    data: data,
+    type: 'line',
+    stack: 'ly',
+    borderColor: '{CHART_LASTYEAR_LINE}',
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderDash: [6, 4],
+    pointRadius: 2,
+    pointBackgroundColor: '{CHART_LASTYEAR_LINE}',
+    tension: 0.3,
+    spanGaps: false,
+    order: 1,
+  }};
+}}
+
 // ── Recálculo y Renderizado Dinámico de Gráficas ──────────────────────────
 function renderChartsDynamic(records) {{
   // Extraer semanas únicas ordenadas
@@ -839,14 +1064,15 @@ function renderChartsDynamic(records) {{
   }});
 
   const totalesSem = sortedWeeks.map(w => weekMap[w].total);
-  const planSem = sortedWeeks.map(w => DATA.plan_map[w] || 0);
+  const planSem    = planSeries(sortedWeeks);
+  const lySem      = lastYearSeries(sortedWeeks);
+  const hasLY      = lySem.some(v => v !== null);
 
-  // 1. Ventas Semanales + Plan
-  if (charts.semanal) charts.semanal.destroy();
-  charts.semanal = new Chart(document.getElementById('chartSemanal'), {{
+  // 1. Ventas Semanales + Plan + Año Anterior (línea gris)
+  chartFactories.semanal = () => ({{
     type: 'bar',
     data: {{
-      labels: sortedWeeks,
+      labels: sortedWeeks.slice(),
       datasets: [
         {{
           label: 'Ventas Netas $',
@@ -856,46 +1082,46 @@ function renderChartsDynamic(records) {{
           borderWidth: 1,
           order: 2,
         }},
-        {{
-          label: 'Plan $',
-          data: planSem,
-          type: 'line',
-          borderColor: '{CHART_PLAN_LINE}',
-          backgroundColor: 'transparent',
-          borderWidth: 2,
-          pointRadius: 3,
-          tension: 0.3,
-          order: 1,
-        }},
+        planDataset(planSem),
+        ...(hasLY ? [lastYearDataset(lySem)] : []),
       ]
     }},
     options: chartOptions('$MXN miles (sin IVA)', true),
   }});
 
-  // 2. Ventas por Producto por Semana
-  if (charts.producto) charts.producto.destroy();
+  // 2. Ventas por Producto por Semana + Plan + Año Anterior (línea gris)
   const prodNames = DATA.filtros.productos;
-  const prodDatasets = prodNames.map(pName => ({{
-    label: pName,
+  const prodSeries = prodNames.map(pName => ({{
+    name: pName,
     data: sortedWeeks.map(w => weekMap[w].prods[pName] || 0),
-    backgroundColor: DATA.product_colors[pName] || '#999',
-    stack: 'prod',
   }}));
-  charts.producto = new Chart(document.getElementById('chartProducto'), {{
+  chartFactories.producto = () => ({{
     type: 'bar',
-    data: {{ labels: sortedWeeks, datasets: prodDatasets }},
+    data: {{
+      labels: sortedWeeks.slice(),
+      datasets: [
+        ...prodSeries.map(s => ({{
+          label: s.name,
+          data: s.data,
+          backgroundColor: DATA.product_colors[s.name] || '#999',
+          stack: 'prod',
+          order: 2,
+        }})),
+        planDataset(planSem),
+        ...(hasLY ? [lastYearDataset(lySem)] : []),
+      ]
+    }},
     options: chartOptions('$MXN miles (sin IVA)', false),
   }});
 
   // 3. Ranking de Productos
-  if (charts.ranking) charts.ranking.destroy();
   const prodTotals = {{}};
   records.forEach(r => {{
     const p = r.producto_display || r.producto;
     prodTotals[p] = (prodTotals[p] || 0) + (r.venta_sin_iva || 0);
   }});
   const sortedProds = Object.entries(prodTotals).sort((a,b) => b[1] - a[1]);
-  charts.ranking = new Chart(document.getElementById('chartRanking'), {{
+  chartFactories.ranking = () => ({{
     type: 'bar',
     data: {{
       labels: sortedProds.map(p => p[0]),
@@ -924,14 +1150,13 @@ function renderChartsDynamic(records) {{
   }});
 
   // 4. Top Regiones / Estados
-  if (charts.regional) charts.regional.destroy();
   const stateTotals = {{}};
   records.forEach(r => {{
     const s = r.estado || 'Sin Estado';
     stateTotals[s] = (stateTotals[s] || 0) + (r.venta_sin_iva || 0);
   }});
   const sortedStates = Object.entries(stateTotals).sort((a,b) => b[1] - a[1]).slice(0, 12);
-  charts.regional = new Chart(document.getElementById('chartRegional'), {{
+  chartFactories.regional = () => ({{
     type: 'bar',
     data: {{
       labels: sortedStates.map(s => s[0]),
@@ -960,19 +1185,34 @@ function renderChartsDynamic(records) {{
   }});
 
   // 5. Ventas por Canal por Semana
-  if (charts.canal) charts.canal.destroy();
   const canalNames = DATA.filtros.canales;
-  const canalDatasets = canalNames.map(cName => ({{
-    label: cName,
+  const canalSeries = canalNames.map(cName => ({{
+    name: cName,
     data: sortedWeeks.map(w => weekMap[w].canales[cName] || 0),
-    backgroundColor: DATA.canal_colors[cName] || '#999',
-    stack: 'canal',
   }}));
-  charts.canal = new Chart(document.getElementById('chartCanal'), {{
+  chartFactories.canal = () => ({{
     type: 'bar',
-    data: {{ labels: sortedWeeks, datasets: canalDatasets }},
+    data: {{
+      labels: sortedWeeks.slice(),
+      datasets: canalSeries.map(s => ({{
+        label: s.name,
+        data: s.data,
+        backgroundColor: DATA.canal_colors[s.name] || '#999',
+        stack: 'canal',
+      }})),
+    }},
     options: chartOptions('$MXN miles (sin IVA)', false),
   }});
+
+  // Instanciar (o reinstanciar) las gráficas de las tarjetas
+  Object.keys(CHART_CANVAS).forEach(key => {{
+    if (charts[key]) charts[key].destroy();
+    charts[key] = new Chart(document.getElementById(CHART_CANVAS[key]),
+                            chartFactories[key]());
+  }});
+
+  // Si el modal está abierto, refrescarlo con los datos recién filtrados
+  if (modalChartKey) renderModalChart(modalChartKey);
 }}
 
 function chartOptions(yLabel, showPlan) {{
@@ -982,6 +1222,8 @@ function chartOptions(yLabel, showPlan) {{
     plugins: {{
       legend: {{ position: 'bottom', labels: {{ font: {{size: 10}}, boxWidth: 12 }} }},
       tooltip: {{
+        // Las semanas sin histórico del año anterior van en null: no se listan
+        filter: item => item.raw !== null && item.raw !== undefined,
         callbacks: {{
           label: ctx => ` ${{ctx.dataset.label}}: ${{fmtCur(ctx.raw)}}`
         }}
@@ -1149,6 +1391,48 @@ function downloadAllCharts() {{
     delay += 300;
   }});
 }}
+
+// ── Modal: ver una gráfica ampliada ───────────────────────────────────────
+function openChartModal(key) {{
+  if (!chartFactories[key]) {{
+    alert('La gráfica solicitada no está lista.');
+    return;
+  }}
+  modalChartKey = key;
+  document.getElementById('chartModalTitle').textContent = CHART_TITLES[key] || 'Gráfica';
+  document.getElementById('chartModalOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  renderModalChart(key);
+}}
+
+function renderModalChart(key) {{
+  const factory = chartFactories[key];
+  if (!factory) return;
+  // La fábrica entrega datasets nuevos, así que la instancia del modal es
+  // independiente de la de la tarjeta.
+  const cfg = factory();
+  cfg.options = Object.assign({{}}, cfg.options, {{
+    responsive: true,
+    maintainAspectRatio: false,
+  }});
+  if (modalChart) modalChart.destroy();
+  modalChart = new Chart(document.getElementById('chartModalCanvas'), cfg);
+}}
+
+function closeChartModal() {{
+  if (modalChart) {{ modalChart.destroy(); modalChart = null; }}
+  modalChartKey = null;
+  document.getElementById('chartModalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}}
+
+function handleModalBackdrop(ev) {{
+  if (ev.target === ev.currentTarget) closeChartModal();
+}}
+
+document.addEventListener('keydown', ev => {{
+  if (ev.key === 'Escape' && modalChartKey) closeChartModal();
+}});
 
 // ── Helpers de Formato ────────────────────────────────────────────────────
 function fmtCur(v) {{

@@ -85,6 +85,7 @@ CANAL_MAPPING = {
 # ---------------------------------------------------------------------------
 CHART_PLAN_LINE       = "#E23B2E"   # línea roja "Plan de ventas"
 CHART_LASTYEAR_AREA   = "#E7D6A6"   # área "Año Pasado" (khaki claro)
+CHART_LASTYEAR_LINE   = "#CEB4F1"   # línea "Año Anterior" del dashboard (lila suave)
 CHART_GRID            = "#E2E2E2"   # cuadrícula horizontal / ejes
 CHART_LABEL           = "#333333"   # etiquetas de dato sobre barras
 HIGHLIGHT_CREAM       = "#FBF3DD"   # fila/columna resaltada
