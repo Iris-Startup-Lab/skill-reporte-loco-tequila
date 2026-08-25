@@ -57,27 +57,102 @@ def _load_csv(filepath: str) -> pd.DataFrame:
     return df
 
 
+def _load_table(filepath: str) -> pd.DataFrame:
+    """Carga un CSV o XLSX con detección automática de encoding y selección inteligente de hoja."""
+    if not filepath or not os.path.exists(filepath):
+        return pd.DataFrame()
+    if filepath.lower().endswith(".xlsx") or filepath.lower().endswith(".xls"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(filepath, read_only=True)
+            sheets = wb.sheetnames
+            target_sheet = sheets[0]
+            for s in sheets:
+                s_low = s.lower()
+                if "clean" in s_low or "hoja1" in s_low or "bdd" in s_low or "resumen" in s_low or "data" in s_low:
+                    target_sheet = s
+                    break
+            return pd.read_excel(filepath, sheet_name=target_sheet)
+        except Exception:
+            return pd.read_excel(filepath)
+    else:
+        return _load_csv(filepath)
+
+
+EXPANDED_PRODUCT_MAPPING = {
+    "Loco Blanco":  "Loco Blanco",
+    "Puro Corazon": "Puro Corazon",
+    "Puro Corazón": "Puro Corazon",
+    "Loco Ambar":   "Loco Ambar",
+    "Loco Ámbar":   "Loco Ambar",
+    "Loco 269":     "Loco 269",
+    "loco 269":     "Loco 269",
+    "Loco Aureo":   "Loco Aureo",
+    "Loco Áureo":   "Loco Aureo",
+    "Loco 200":     "Loco 200",
+    "Loco 200 ml":  "Loco 200",
+    "Loco 200 ML":  "Loco 200",
+    "Loco Áureo Elevacion": "Loco Aureo",
+    "Loco Aureo Elevacion": "Loco Aureo",
+    "Vap Loco Blanco (2 copas)": "Loco Blanco",
+    "Vap Loco Ambar (2 copas)": "Loco Ambar",
+    "Vap Puro Corazon (2 copas)": "Puro Corazon",
+    "Loco Ambar (Vap caja piel)": "Loco Ambar",
+    "LOCO TEQUILA BLANCO 750 ML": "Loco Blanco",
+    "LOCO TEQUILA BLANCO 200 ML": "Loco 200",
+    "LOCO TEQUILA REPOSADO ÁMBAR 750 ML": "Loco Ambar",
+    "LOCO TEQUILA REPOSADO AMBAR 750 ML": "Loco Ambar",
+    "LOCO TEQUILA PURO CORAZÓN 750 ML": "Puro Corazon",
+    "LOCO TEQUILA PURO CORAZON 750 ML": "Puro Corazon",
+    "LOCO TEQUILA AÑEJO ÁUREO 750 ML": "Loco Aureo",
+    "LOCO TEQUILA ANEJO AUREO 750 ML": "Loco Aureo",
+    "TEQ LOCO EDICION ESPECIAL 2026": "Loco 269",
+    "TEQ LOCO PURO COR D MUERTOS 25 750M": "Puro Corazon",
+    "TEQ LOCO PURO COR MURCIELAGO 750ML": "Puro Corazon",
+    "TEQ LOCO PURO COR SERPIENTE 750ML": "Puro Corazon",
+    "TEQ LOCO PURO CORAZON COYOTE 750ML": "Puro Corazon",
+    "TEQ LOCO PURO CORAZON COLIBRI 750ML": "Puro Corazon",
+    "TEQ LOCO PURO CORAZON X ANIV 750ML": "Puro Corazon",
+    "VAP LOCO TEQUILA BLANCO 750 ML": "Loco Blanco",
+    "VAP LOCO TEQUILA BLANCO 750 ML ": "Loco Blanco",
+    "VAP LOCO TEQUILA REPOSADO ÁMBAR 750 ML": "Loco Ambar",
+    "VAP LOCO TEQUILA REPOSADO AMBAR 750 ML": "Loco Ambar",
+    "VAP LOCO TEQUILA 2026": "Loco 269",
+}
+
+
 def _normalize_product(name: str) -> str:
     """Normaliza nombres de producto a las claves canónicas."""
-    name = str(name).strip()
-    mapping = {
-        "Loco Blanco":  "Loco Blanco",
-        "Puro Corazon": "Puro Corazon",
-        "Puro Corazón": "Puro Corazon",
-        "Loco Ambar":   "Loco Ambar",
-        "Loco Ámbar":   "Loco Ambar",
-        "Loco 269":     "Loco 269",
-        "Loco Aureo":   "Loco Aureo",
-        "Loco Áureo":   "Loco Aureo",
-        "Loco 200":     "Loco 200",
-    }
-    return mapping.get(name, name)
+    s = str(name).strip()
+    return EXPANDED_PRODUCT_MAPPING.get(s, s)
 
 
 def _normalize_canal(canal: str) -> str:
     """Normaliza canal al nombre canónico de reporte."""
     canal = str(canal).strip()
     return CANAL_MAPPING.get(canal, canal)
+
+
+def _infer_sub_canal(canal_norm: str, cliente: str) -> str:
+    if canal_norm != "Off Trade":
+        return str(canal_norm)
+    cli = str(cliente).lower()
+    moderno_keywords = ["liverpool", "palacio", "walmart", "soriana", "chedraui", "costco", "sams", "city market", "superama", "fresko"]
+    if any(k in cli for k in moderno_keywords):
+        return "Moderno"
+    return "Tradicional"
+
+
+def _infer_categoria(producto: str) -> str:
+    cat_map = {
+        "Loco Blanco": "Blanco",
+        "Puro Corazon": "Puro Corazón",
+        "Loco Ambar": "Ámbar",
+        "Loco 269": "Blanco",
+        "Loco Aureo": "Áureo",
+        "Loco 200": "Blanco",
+    }
+    return cat_map.get(producto, "Blanco")
 
 
 def _week_str(year: int, week: int) -> str:
@@ -104,7 +179,7 @@ class LocoDataProcessor:
 
     Parámetros
     ----------
-    datos_dir   : carpeta con los CSVs
+    datos_dir   : carpeta con los CSVs o XLSXs
     semana      : número de semana ISO (1-52)
     anio        : año del reporte
     n_top_clientes : número de clientes top para desglose
@@ -134,35 +209,88 @@ class LocoDataProcessor:
         plan_path    = os.path.join(self.datos_dir, "loco_actual_vs_plan_semanal.csv")
 
         # Fallback inteligente si no existe con el nombre exacto
-        if not os.path.exists(actuals_path) and os.path.isdir(self.datos_dir):
-            csvs = [os.path.join(self.datos_dir, f) for f in os.listdir(self.datos_dir) if f.lower().endswith(".csv")]
-            for c in csvs:
-                c_name = os.path.basename(c).lower()
-                if "actual" in c_name or "venta" in c_name or "enriquecido" in c_name:
-                    actuals_path = c
-                    break
-            else:
-                if csvs: actuals_path = csvs[0]
+        if os.path.isdir(self.datos_dir):
+            all_files = [
+                os.path.join(self.datos_dir, f) for f in os.listdir(self.datos_dir)
+                if f.lower().endswith(".csv") or f.lower().endswith(".xlsx")
+            ]
 
-        if not os.path.exists(plan_path) and os.path.isdir(self.datos_dir):
-            csvs = [os.path.join(self.datos_dir, f) for f in os.listdir(self.datos_dir) if f.lower().endswith(".csv")]
-            for c in csvs:
-                c_name = os.path.basename(c).lower()
-                if "plan" in c_name or "presupuesto" in c_name or "vs_plan" in c_name:
-                    plan_path = c
-                    break
+            if not os.path.exists(actuals_path):
+                for c in all_files:
+                    c_name = os.path.basename(c).lower()
+                    if ("actual" in c_name or "venta" in c_name or "enriquecido" in c_name or "reporte" in c_name) and "plan" not in c_name and "presupuesto" not in c_name:
+                        actuals_path = c
+                        break
+                else:
+                    if all_files:
+                        actuals_path = all_files[0]
 
-        self.df_actuals = _load_csv(actuals_path)
-        self.df_plan    = _load_csv(plan_path) if os.path.exists(plan_path) else pd.DataFrame()
+            if not os.path.exists(plan_path):
+                for c in all_files:
+                    c_name = os.path.basename(c).lower()
+                    if "plan" in c_name or "presupuesto" in c_name or "vs_plan" in c_name or "semanalizado" in c_name:
+                        plan_path = c
+                        break
+
+        self.df_actuals = _load_table(actuals_path)
+        self.df_plan    = _load_table(plan_path) if os.path.exists(plan_path) else pd.DataFrame()
 
     def _enrich(self):
         df = self.df_actuals.copy()
+        if df.empty:
+            self.df = df
+            self.dfp = self.df_plan.copy()
+            return
 
-        # Normalizar nombres
-        df["producto"]   = df["SKU/producto"].apply(_normalize_product)
-        df["canal_norm"] = df["canal_reporte"].apply(_normalize_canal)
+        # 1. Filtrar registros cancelados si existe columna de Estatus
+        estatus_cols = [c for c in df.columns if "estatus" in c.lower() or "status" in c.lower()]
+        if estatus_cols:
+            c_est = estatus_cols[0]
+            df = df[df[c_est].astype(str).str.strip().str.lower() != "cancelado"].copy()
 
-        # Parsear semana y año
+        # 2. Fecha y Año
+        fecha_cols = [c for c in df.columns if c in ["fecha de venta", "Fecha de Emisión", "Fecha de Emision", "fecha", "Fecha"]]
+        if fecha_cols and "fecha de venta" not in df.columns:
+            df["fecha de venta"] = df[fecha_cols[0]]
+
+        if "fecha de venta" in df.columns:
+            df["fecha"] = pd.to_datetime(df["fecha de venta"], errors="coerce")
+        else:
+            df["fecha"] = pd.to_datetime(pd.Series([f"{self.anio}-01-01"] * len(df)))
+
+        df["mes"] = df["fecha"].dt.month.fillna(1).astype(int)
+        df["mes_nombre"] = df["fecha"].dt.strftime("%b/%y")
+
+        if "anio" in df.columns:
+            df["anio_num"] = pd.to_numeric(df["anio"], errors="coerce").fillna(self.anio).astype("Int64")
+        elif df["fecha"].notna().any():
+            df["anio_num"] = df["fecha"].dt.year.fillna(self.anio).astype("Int64")
+            df["anio"] = df["anio_num"]
+        else:
+            df["anio_num"] = pd.Series(self.anio, index=df.index).astype("Int64")
+            df["anio"] = self.anio
+
+        # 3. Semana de venta
+        if "semana de venta" not in df.columns:
+            sem_cols = [c for c in df.columns if c.lower() in ["semana", "semana_num", "week"]]
+            if sem_cols:
+                sem_col = sem_cols[0]
+                def _parse_sem_val(val, yr):
+                    s = str(val).strip()
+                    nums = re.findall(r"\d+", s)
+                    if nums:
+                        w_int = int(nums[-1])
+                        return f"{yr}-W{w_int:02d}"
+                    return f"{yr}-W01"
+                df["semana de venta"] = [
+                    _parse_sem_val(v, y if pd.notna(y) else self.anio)
+                    for v, y in zip(df[sem_col], df["anio_num"])
+                ]
+            elif df["fecha"].notna().any():
+                df["semana de venta"] = df["fecha"].dt.strftime("%G-W%V")
+            else:
+                df["semana de venta"] = f"{self.anio}-W{self.semana:02d}"
+
         df["semana_str"] = df["semana de venta"].astype(str).str.strip()
         df["semana_num"] = (
             df["semana_str"]
@@ -170,12 +298,125 @@ class LocoDataProcessor:
             .astype(float)
             .astype("Int64")
         )
-        df["anio_num"] = pd.to_numeric(df["anio"], errors="coerce").astype("Int64")
+        if df["semana_num"].isna().any():
+            df["semana_num"] = df["semana_num"].fillna(df["fecha"].dt.isocalendar().week).astype("Int64")
 
-        # Parsear fecha
-        df["fecha"] = pd.to_datetime(df["fecha de venta"], errors="coerce")
-        df["mes"]   = df["fecha"].dt.month
-        df["mes_nombre"] = df["fecha"].dt.strftime("%b/%y")
+        # 4. SKU / Producto
+        if "SKU/producto" not in df.columns:
+            sku_cols = [c for c in df.columns if c in ["SKU", "ARTÍCULO", "Articulo", "producto", "Producto", "articulo"]]
+            if sku_cols:
+                df["SKU/producto"] = df[sku_cols[0]]
+            else:
+                df["SKU/producto"] = "Loco Blanco"
+
+        df["producto"] = df["SKU/producto"].apply(_normalize_product)
+
+        # 5. Canal y Canal de Reporte
+        if "canal_reporte" not in df.columns:
+            can_cols = [c for c in df.columns if c in ["Canal / Reporte", "canal", "Canal", "CANAL"]]
+            if can_cols:
+                df["canal_reporte"] = df[can_cols[0]]
+            else:
+                df["canal_reporte"] = "Off Trade"
+
+        if "canal" not in df.columns:
+            df["canal"] = df["canal_reporte"]
+
+        df["canal_norm"] = df["canal_reporte"].apply(_normalize_canal)
+
+        # 6. Cliente
+        if "cliente" not in df.columns:
+            cli_cols = [c for c in df.columns if c in ["Cliente", "CLIENTE", "Receptor", "receptor", "cliente_nombre"]]
+            if cli_cols:
+                df["cliente"] = df[cli_cols[0]].fillna("Público en General")
+            else:
+                df["cliente"] = "Público en General"
+
+        # 7. Región o Estado
+        if "region_o_estado" not in df.columns:
+            reg_cols = [c for c in df.columns if c in ["Ubicación", "Ubicacion", "ubicacion", "REGIÓN", "Region", "region", "estado", "Estado"]]
+            if reg_cols:
+                df["region_o_estado"] = df[reg_cols[0]].fillna("Nacional")
+            else:
+                df["region_o_estado"] = "Nacional"
+
+        df["region_o_estado"] = df["region_o_estado"].astype(str).str.strip().replace({
+            "Quetetaro": "Queretaro",
+            "Cava Sautto": "Guanajuato",
+        })
+
+        # 8. Unidades / Botellas
+        if "botellas" not in df.columns:
+            unit_cols = [c for c in df.columns if c in ["Unidades", "unidades", "unidades_de_venta", "UNIDADES", "cantidad", "Cantidad"]]
+            if unit_cols:
+                df["botellas"] = pd.to_numeric(df[unit_cols[0]], errors="coerce").fillna(0)
+            else:
+                df["botellas"] = 0
+
+        if "unidades_de_venta" not in df.columns:
+            df["unidades_de_venta"] = df["botellas"]
+
+        # 9. Precios y Ventas
+        if "precio_unitario" not in df.columns:
+            imp_cols = [c for c in df.columns if c in ["Importe", "importe", "PRECIO / BOT", "precio", "Precio"]]
+            if imp_cols:
+                df["precio_unitario"] = pd.to_numeric(df[imp_cols[0]], errors="coerce").fillna(0)
+            else:
+                df["precio_unitario"] = 0
+
+        if "venta_sin_impuestos" not in df.columns:
+            vta_cols = [c for c in df.columns if c in ["Venta", "venta", "VENTA NETA (MXN)", "venta_neta", "subtotal", "Subtotal"]]
+            if vta_cols:
+                df["venta_sin_impuestos"] = pd.to_numeric(df[vta_cols[0]], errors="coerce").fillna(0)
+            else:
+                df["venta_sin_impuestos"] = df["botellas"] * df["precio_unitario"]
+
+        if "venta_con_impuestos" not in df.columns:
+            monto_cols = [c for c in df.columns if c in ["Monto", "monto", "Venta + IVA", "total", "Total"]]
+            if monto_cols:
+                df["venta_con_impuestos"] = pd.to_numeric(df[monto_cols[0]], errors="coerce").fillna(0)
+            else:
+                df["venta_con_impuestos"] = df["venta_sin_impuestos"] * 1.53
+
+        # 10. Volumetría: ml_botella, litros, cajas_9L
+        if "ml_botella" not in df.columns:
+            df["ml_botella"] = df["SKU/producto"].apply(lambda s: 200 if "200" in str(s) else 750)
+        if "litros" not in df.columns:
+            df["litros"] = df["botellas"] * df["ml_botella"] / 1000.0
+        if "cajas_9L" not in df.columns:
+            df["cajas_9L"] = df["litros"] / 9.0
+
+        # 11. Sub-canal
+        if "sub_canal" not in df.columns:
+            df["sub_canal"] = df.apply(lambda r: _infer_sub_canal(r.get("canal_norm"), r.get("cliente")), axis=1)
+
+        # 12. Categoría o línea
+        if "categoria_o_linea" not in df.columns:
+            df["categoria_o_linea"] = df["producto"].apply(_infer_categoria)
+
+        # 13. Margen
+        if "margen_pesos" not in df.columns or df["margen_pesos"].sum() == 0:
+            cogs_map = {}
+            if not self.df_plan.empty and "COGS" in self.df_plan.columns:
+                try:
+                    dfp_temp = self.df_plan.copy()
+                    if "ARTÍCULO" in dfp_temp.columns:
+                        dfp_temp["_p"] = dfp_temp["ARTÍCULO"].apply(_normalize_product)
+                    elif "SKU/producto" in dfp_temp.columns:
+                        dfp_temp["_p"] = dfp_temp["SKU/producto"].apply(_normalize_product)
+                    else:
+                        dfp_temp["_p"] = "Loco Blanco"
+                    cogs_map = dfp_temp[dfp_temp["COGS"] > 0].groupby("_p")["COGS"].mean().to_dict()
+                except Exception:
+                    cogs_map = {}
+
+            if cogs_map:
+                cogs_unit = df["producto"].map(cogs_map).fillna(450.0)
+                df["margen_pesos"] = df["venta_sin_impuestos"] - (df["botellas"] * cogs_unit)
+                df["margen_pct"] = np.where(df["venta_sin_impuestos"] > 0, df["margen_pesos"] / df["venta_sin_impuestos"] * 100, 60.0)
+            else:
+                df["margen_pct"] = 60.0
+                df["margen_pesos"] = df["venta_sin_impuestos"] * 0.60
 
         # Numéricos
         for col in ["venta_sin_impuestos", "venta_con_impuestos",
@@ -186,22 +427,100 @@ class LocoDataProcessor:
 
         self.df = df
 
-        # Plan también
+        # --------------------------------------------------------------
+        # Plan
+        # --------------------------------------------------------------
         dfp = self.df_plan.copy()
-        dfp["producto"]   = dfp["SKU/producto"].apply(_normalize_product)
-        dfp["canal_norm"] = dfp["canal_reporte"].apply(_normalize_canal)
-        dfp["semana_str"] = dfp["semana de venta"].astype(str).str.strip()
-        dfp["semana_num"] = (
-            dfp["semana_str"]
-            .str.extract(r"W(\d+)")[0]
-            .astype(float)
-            .astype("Int64")
-        )
-        dfp["anio_num"] = pd.to_numeric(dfp["anio"], errors="coerce").astype("Int64")
-        for col in ["plan_venta_sin_impuestos", "plan_venta_con_impuestos",
-                    "plan_margen_pesos", "plan_botellas", "plan_cajas_9L"]:
-            if col in dfp.columns:
-                dfp[col] = pd.to_numeric(dfp[col], errors="coerce").fillna(0)
+        if not dfp.empty:
+            # SKU
+            if "SKU/producto" not in dfp.columns:
+                art_cols = [c for c in dfp.columns if "art" in c.lower()]
+                if art_cols:
+                    dfp["SKU/producto"] = dfp[art_cols[0]]
+                elif "producto" in dfp.columns:
+                    dfp["SKU/producto"] = dfp["producto"]
+                else:
+                    dfp["SKU/producto"] = "Loco Blanco"
+
+            dfp["producto"] = dfp["SKU/producto"].apply(_normalize_product)
+
+            # Canal
+            if "canal_reporte" not in dfp.columns:
+                can_cols = [c for c in dfp.columns if "canal" in c.lower()]
+                if can_cols:
+                    dfp["canal_reporte"] = dfp[can_cols[0]]
+                else:
+                    dfp["canal_reporte"] = "Off Trade"
+
+            dfp["canal_norm"] = dfp["canal_reporte"].apply(_normalize_canal)
+
+            # Año: si no tiene año, asumir año concurrente (self.anio)
+            if "anio" in dfp.columns:
+                dfp["anio_num"] = pd.to_numeric(dfp["anio"], errors="coerce").fillna(self.anio).astype("Int64")
+            else:
+                dfp["anio_num"] = pd.Series(self.anio, index=dfp.index).astype("Int64")
+                dfp["anio"] = self.anio
+
+            # Semana
+            if "semana de venta" not in dfp.columns:
+                sem_cols = [c for c in dfp.columns if "semana" in c.lower()]
+                if sem_cols:
+                    def _parse_plan_sem(val, yr):
+                        nums = re.findall(r"\d+", str(val))
+                        if nums:
+                            return f"{yr}-W{int(nums[-1]):02d}"
+                        return f"{yr}-W01"
+                    dfp["semana de venta"] = [
+                        _parse_plan_sem(v, y if pd.notna(y) else self.anio)
+                        for v, y in zip(dfp[sem_cols[0]], dfp["anio_num"])
+                    ]
+                else:
+                    dfp["semana de venta"] = f"{self.anio}-W{self.semana:02d}"
+
+            dfp["semana_str"] = dfp["semana de venta"].astype(str).str.strip()
+            dfp["semana_num"] = (
+                dfp["semana_str"]
+                .str.extract(r"W(\d+)")[0]
+                .astype(float)
+                .astype("Int64")
+            )
+
+            # Unidades / Botellas
+            if "plan_botellas" not in dfp.columns:
+                unit_cols = [c for c in dfp.columns if "unidad" in c.lower() or "botella" in c.lower()]
+                if unit_cols:
+                    dfp["plan_botellas"] = pd.to_numeric(dfp[unit_cols[0]], errors="coerce").fillna(0)
+                else:
+                    dfp["plan_botellas"] = 0
+            if "plan_unidades" not in dfp.columns:
+                dfp["plan_unidades"] = dfp["plan_botellas"]
+
+            # Ventas sin impuestos
+            if "plan_venta_sin_impuestos" not in dfp.columns:
+                vta_cols = [c for c in dfp.columns if "venta neta" in c.lower() or "plan_venta" in c.lower() or "venta_sin" in c.lower()]
+                if vta_cols:
+                    dfp["plan_venta_sin_impuestos"] = pd.to_numeric(dfp[vta_cols[0]], errors="coerce").fillna(0)
+                else:
+                    dfp["plan_venta_sin_impuestos"] = 0
+
+            # Margen en pesos
+            if "plan_margen_pesos" not in dfp.columns:
+                cogs_cols = [c for c in dfp.columns if "cogs total" in c.lower() or "costo total" in c.lower()]
+                if cogs_cols:
+                    cogs_tot = pd.to_numeric(dfp[cogs_cols[0]], errors="coerce").fillna(0)
+                    dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] - cogs_tot
+                else:
+                    dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] * 0.60
+
+            # Cajas 9L
+            if "plan_cajas_9L" not in dfp.columns:
+                ml = dfp["SKU/producto"].apply(lambda s: 200 if "200" in str(s) else 750)
+                dfp["plan_cajas_9L"] = dfp["plan_botellas"] * ml / 9000.0
+
+            for col in ["plan_venta_sin_impuestos", "plan_venta_con_impuestos",
+                        "plan_margen_pesos", "plan_botellas", "plan_cajas_9L"]:
+                if col in dfp.columns:
+                    dfp[col] = pd.to_numeric(dfp[col], errors="coerce").fillna(0)
 
         self.dfp = dfp
 
@@ -443,6 +762,7 @@ class LocoDataProcessor:
         """
         Retorna ventas semanales de las últimas n_semanas.
         Si filtro != None, filtra por el producto o canal indicado.
+        Garantiza que siempre retorne exactamente n_semanas filas en orden cronológico.
         """
         y, w = self.anio, self.semana
 
@@ -454,6 +774,8 @@ class LocoDataProcessor:
             cy, cw = _prev_week(cy, cw)
 
         periodos = list(reversed(periodos))
+        base_df = pd.DataFrame(periodos, columns=["anio_num", "semana_num"])
+        base_df["label"] = base_df["semana_num"].apply(lambda x: f"W{int(x):02d}")
 
         # Filtrar datos
         cond = pd.Series(False, index=self.df.index)
@@ -468,18 +790,22 @@ class LocoDataProcessor:
 
         group_col = "producto" if group_by == "producto" else "canal_norm"
 
-        piv = (
-            df_sub.groupby(["anio_num", "semana_num", group_col])["venta_sin_impuestos"]
-            .sum()
-            .unstack(fill_value=0)
-        )
-        piv["Total"] = piv.sum(axis=1)
-        piv = piv.reset_index()
+        if not df_sub.empty:
+            piv = (
+                df_sub.groupby(["anio_num", "semana_num", group_col])["venta_sin_impuestos"]
+                .sum()
+                .unstack(fill_value=0)
+            )
+            piv["Total"] = piv.sum(axis=1)
+            piv = piv.reset_index()
+            result = pd.merge(base_df, piv, on=["anio_num", "semana_num"], how="left").fillna(0)
+        else:
+            result = base_df.copy()
+            if filtro:
+                result[filtro] = 0.0
+            result["Total"] = 0.0
 
-        # Etiquetas de semana: "W30"
-        piv["label"] = piv["semana_num"].apply(lambda x: f"W{int(x):02d}")
-
-        return piv
+        return result
 
     def get_serie_semanal_botellas(
         self,
@@ -496,6 +822,9 @@ class LocoDataProcessor:
             cy, cw = _prev_week(cy, cw)
         periodos = list(reversed(periodos))
 
+        base_df = pd.DataFrame(periodos, columns=["anio_num", "semana_num"])
+        base_df["label"] = base_df["semana_num"].apply(lambda x: f"W{int(x):02d}")
+
         cond = pd.Series(False, index=self.df.index)
         for ay, aw in periodos:
             cond |= (self.df["anio_num"] == ay) & (self.df["semana_num"] == aw)
@@ -508,15 +837,22 @@ class LocoDataProcessor:
 
         group_col = "producto" if group_by == "producto" else "canal_norm"
 
-        piv = (
-            df_sub.groupby(["anio_num", "semana_num", group_col])["botellas"]
-            .sum()
-            .unstack(fill_value=0)
-        )
-        piv["Total"] = piv.sum(axis=1)
-        piv = piv.reset_index()
-        piv["label"] = piv["semana_num"].apply(lambda x: f"W{int(x):02d}")
-        return piv
+        if not df_sub.empty:
+            piv = (
+                df_sub.groupby(["anio_num", "semana_num", group_col])["botellas"]
+                .sum()
+                .unstack(fill_value=0)
+            )
+            piv["Total"] = piv.sum(axis=1)
+            piv = piv.reset_index()
+            result = pd.merge(base_df, piv, on=["anio_num", "semana_num"], how="left").fillna(0)
+        else:
+            result = base_df.copy()
+            if filtro:
+                result[filtro] = 0.0
+            result["Total"] = 0.0
+
+        return result
 
     def get_plan_semanal(
         self,
@@ -533,19 +869,31 @@ class LocoDataProcessor:
             cy, cw = _prev_week(cy, cw)
         periodos = list(reversed(periodos))
 
-        cond = pd.Series(False, index=self.dfp.index)
-        for ay, aw in periodos:
-            cond |= (self.dfp["anio_num"] == ay) & (self.dfp["semana_num"] == aw)
-        dfp_sub = self.dfp[cond].copy()
+        base_df = pd.DataFrame(periodos, columns=["anio_num", "semana_num"])
+        base_df["label"] = base_df["semana_num"].apply(lambda x: f"W{int(x):02d}")
 
-        if filtro_producto:
-            dfp_sub = dfp_sub[dfp_sub["producto"] == filtro_producto]
-        if filtro_canal:
-            dfp_sub = dfp_sub[dfp_sub["canal_norm"] == filtro_canal]
+        if not self.dfp.empty:
+            cond = pd.Series(False, index=self.dfp.index)
+            for ay, aw in periodos:
+                cond |= (self.dfp["anio_num"] == ay) & (self.dfp["semana_num"] == aw)
+            dfp_sub = self.dfp[cond].copy()
 
-        agg = dfp_sub.groupby(["anio_num", "semana_num"])["plan_venta_sin_impuestos"].sum().reset_index()
-        agg["label"] = agg["semana_num"].apply(lambda x: f"W{int(x):02d}")
-        return agg
+            if filtro_producto:
+                dfp_sub = dfp_sub[dfp_sub["producto"] == filtro_producto]
+            if filtro_canal:
+                dfp_sub = dfp_sub[dfp_sub["canal_norm"] == filtro_canal]
+
+            if not dfp_sub.empty:
+                agg = dfp_sub.groupby(["anio_num", "semana_num"])["plan_venta_sin_impuestos"].sum().reset_index()
+                result = pd.merge(base_df, agg, on=["anio_num", "semana_num"], how="left").fillna(0)
+            else:
+                result = base_df.copy()
+                result["plan_venta_sin_impuestos"] = 0.0
+        else:
+            result = base_df.copy()
+            result["plan_venta_sin_impuestos"] = 0.0
+
+        return result
 
     # ------------------------------------------------------------------
     # Público: Tabla comparativa WoW / MoM / YoY

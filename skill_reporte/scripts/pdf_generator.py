@@ -419,7 +419,9 @@ def make_combo_chart(
 
     # Área "Año Pasado"
     if ly_values and any(v > 0 for v in ly_values):
-        lv = [v / 1000 for v in ly_values]
+        lv = [v / 1000 for v in list(ly_values)[:n]]
+        if len(lv) < n:
+            lv += [0.0] * (n - len(lv))
         ax.fill_between(x, lv, alpha=0.55,
                         color=hex_to_rgb(CHART_LASTYEAR_AREA), label="Año Pasado")
 
@@ -427,7 +429,10 @@ def make_combo_chart(
     bottom = np.zeros(n)
     categories = [k for k in series_dict if k in color_map]
     for cat in categories:
-        vals = np.array(series_dict[cat]) / 1000
+        cat_raw = list(series_dict[cat])[:n]
+        if len(cat_raw) < n:
+            cat_raw += [0.0] * (n - len(cat_raw))
+        vals = np.array(cat_raw) / 1000
         c    = hex_to_rgb(color_map.get(cat, "#AAAAAA"))
         ax.bar(x, vals, bottom=bottom, color=c,
                label=display_names.get(cat, cat), width=0.65, zorder=3)
@@ -435,7 +440,9 @@ def make_combo_chart(
 
     # Línea plan
     if plan_values and any(v > 0 for v in plan_values):
-        pv = [v / 1000 for v in plan_values]
+        pv = [v / 1000 for v in list(plan_values)[:n]]
+        if len(pv) < n:
+            pv += [0.0] * (n - len(pv))
         ax.plot(x, pv, color=hex_to_rgb(CHART_PLAN_LINE),
                 linewidth=1.8, marker="o", markersize=3, label="Plan", zorder=6)
 

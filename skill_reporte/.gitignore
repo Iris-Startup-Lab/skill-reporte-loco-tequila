@@ -20,6 +20,7 @@
 *.config
 *.yaml
 *.yml
-
-__pycache__/
+s__pycache__/
 output/
+# Carpetas no deseadas
+datos_reales_cliente/
