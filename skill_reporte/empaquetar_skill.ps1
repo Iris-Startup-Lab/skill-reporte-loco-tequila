@@ -6,7 +6,7 @@
 
 [CmdletBinding()]
 param (
-    [string]$DestinationZip = "skill_reporte.zip",
+    [string]$DestinationZip = "reporte_loco_tequila.zip",
     [string]$SourceDir = $PSScriptRoot
 )
 
