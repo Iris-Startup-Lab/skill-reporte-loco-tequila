@@ -631,6 +631,10 @@ class LocoReportePDF:
                 self._draw_page_cliente(c, cliente=cliente, mode=mode)
                 c.showPage()
 
+        # Última página: Notas Metodológicas (explicación no técnica para el
+        # cliente final — ver metodologia_reporte.md para el detalle técnico)
+        self._draw_page_notas_metodologicas(c)
+
         c.save()
         print(f"[PDF] Guardado: {self.output_path}")
 
@@ -1269,8 +1273,11 @@ class LocoReportePDF:
             tendencia = "▲" if var_abs >= 0 else "▼"
             color_var = POS_VALUE if var_abs >= 0 else NEG_VALUE
 
-            # Lectura narrativa automática
-            if var_pct < -10:
+            # Lectura narrativa automática ("N/D" si no hay histórico del año
+            # anterior cargado — ver var()/year_b en get_resumen_ejecutivo)
+            if var_pct is None:
+                lectura = "N/D — sin histórico del año anterior en los datos cargados."
+            elif var_pct < -10:
                 lectura = "Atención: caída relevante. Revisar causa raíz."
             elif var_pct < 0:
                 lectura = "Ligera baja. Monitorear."
@@ -1768,6 +1775,161 @@ class LocoReportePDF:
                 size_inches=(9.5, 2.5),
             )
             self._embed_png(c, chart_png, self.MARGIN, y - chart_h, self.CONTENT_W, chart_h)
+
+    # ------------------------------------------------------------------
+    # Página final: Notas Metodológicas (para el cliente final)
+    # ------------------------------------------------------------------
+
+    def _draw_page_notas_metodologicas(self, c):
+        """
+        Última página del PDF. Explica en lenguaje claro y no técnico cómo se
+        calculó cada bloque/hoja del reporte — en particular qué significa
+        "N/D" en una variación %, que es lo que generó confusión cuando el
+        archivo de ventas del cliente solo tenía un año de datos cargado
+        (sin histórico del año anterior contra el cual comparar).
+
+        Para el detalle técnico completo (código, líneas, fórmulas) ver
+        metodologia_reporte.md en la raíz del proyecto — este texto es la
+        versión ejecutiva/no técnica de esa misma lógica.
+        """
+        subt = "Notas Metodológicas"
+
+        styles = getSampleStyleSheet()
+        style_h2 = ParagraphStyle(
+            "NotasH2", parent=styles["Heading2"],
+            fontName="Helvetica-Bold", fontSize=10.5, leading=13,
+            textColor=MAROON_RL,
+        )
+        style_body = ParagraphStyle(
+            "NotasBody", parent=styles["Normal"],
+            fontName="Helvetica", fontSize=8.5, leading=11.5,
+            textColor=BLACK_RL, alignment=TA_LEFT,
+        )
+        style_bullet = ParagraphStyle(
+            "NotasBullet", parent=style_body,
+            leftIndent=12,
+        )
+
+        # (tipo, texto[, gap_antes]) — gap_antes solo para separar secciones "h2"
+        contenido = [
+            ("h2", "1. Ventanas de comparación: ¿qué significa cada una?"),
+            ("bullet",
+             "<b>WoW (Semana vs. Semana Anterior):</b> compara la semana actual contra "
+             "la semana inmediatamente anterior. Sirve para detectar cambios de corto "
+             "plazo — una promoción, un fin de semana largo, un pedido grande puntual."),
+            ("bullet",
+             "<b>YoY Semanal (Semana vs. Mismo Período del Año Anterior):</b> compara la "
+             "semana actual contra la misma semana del calendario del año pasado. Permite "
+             "ver si el negocio crece de forma real, quitando el efecto de estacionalidad."),
+            ("bullet",
+             "<b>YTD vs. Año Anterior (Acumulado del Año):</b> compara todo lo acumulado "
+             "desde la semana 1 hasta la semana de corte de este reporte, contra el mismo "
+             "corte del año anterior."),
+            ("bullet",
+             "<b>Rolling 52 Semanas:</b> suma las últimas 52 semanas con datos disponibles "
+             "(un “año móvil”) y la compara contra las 52 semanas previas a esas. "
+             "Da una vista de tendencia de largo plazo, independiente del cierre de año "
+             "fiscal. Solo aparece cuando hay al menos 40 semanas de histórico cargadas."),
+
+            ("h2", "2. ¿Qué significa “N/D” en una variación %?"),
+            ("body",
+             "Cuando en una tabla o gráfica aparece <b>“N/D”</b> en lugar de un "
+             "porcentaje de variación, significa que <b>no existe ningún dato cargado del "
+             "año de comparación</b>. Por ejemplo: si el archivo de ventas cargado para este "
+             "reporte contiene únicamente información de 2026 y no incluye ningún registro "
+             "de 2025, no hay una base real contra la cual calcular un crecimiento o una "
+             "caída."),
+            ("body",
+             "<b>“N/D” es intencional y significa “No Disponible por falta "
+             "de histórico”. Nunca debe leerse como 0% ni como una caída del negocio.</b> "
+             "En cuanto se cargue un archivo que incluya el histórico del año anterior, el "
+             "reporte calculará y mostrará el porcentaje real de forma automática. Los "
+             "valores en pesos ($) de estos mismos bloques sí son reales y confiables aun "
+             "cuando el % diga “N/D” — la falta de histórico solo afecta la "
+             "comparación porcentual, nunca la venta actual reportada."),
+
+            ("h2", "3. Cómo leer la tabla de 8 columnas (por producto o por canal)"),
+            ("body",
+             "Esta tabla aparece en las páginas de detalle por producto y por canal, en "
+             "vista semanal o acumulada (YTD). Sus columnas, de izquierda a derecha, son:"),
+            ("bullet", "<b>Año Anterior ($):</b> venta del mismo periodo el año pasado (si existe)."),
+            ("bullet", "<b>Plan ($):</b> meta de presupuesto para ese periodo."),
+            ("bullet", "<b>Actual ($):</b> venta real de este reporte, resaltada."),
+            ("bullet", "<b>Categoría:</b> nombre del producto o canal, al centro de la tabla."),
+            ("bullet", "<b>Var. vs Plan $ y Var. vs Plan %:</b> diferencia entre lo Actual y el Plan."),
+            ("bullet",
+             "<b>Var. vs Año Ant. $ y Var. vs Año Ant. %:</b> diferencia entre lo Actual y "
+             "el Año Anterior — aplica la misma regla de “N/D” de la sección 2 "
+             "cuando no hay histórico cargado."),
+            ("body", "La fila “Total” al final de la tabla suma todas las categorías."),
+
+            ("h2", "4. ¿Por qué algunas ventas se agrupan como “Otros” y no se comparan contra el Plan?"),
+            ("body",
+             "Categorías como <b>Agave, Servicios, Kits, Refacturación, Venta de Activo y "
+             "Transformación de Líquido</b> son ingresos reales del negocio, pero no tienen "
+             "un presupuesto (Plan) asignado porque no corresponden a venta de botellas de "
+             "producto tequila catalogado. Para no perder esa información, se agrupan bajo "
+             "la categoría <b>“Otros”</b> en las tablas y gráficas por producto y "
+             "por canal: es dinero real del negocio, solo que sin Plan de ventas contra el "
+             "cual compararse."),
+
+            ("h2", "5. Margen y conversión a cajas de 9 litros"),
+            ("body",
+             "<b>Margen:</b> se calcula primero con el costo real reportado en el archivo "
+             "de ventas. Si esa venta no trae costo, se cruza con el costo del archivo de "
+             "Plan/presupuesto. Si ninguno de los dos está disponible, se usa un margen de "
+             "referencia del 60%, para no dejar el dato en blanco."),
+            ("body",
+             "<b>Cajas de 9 litros:</b> se usa la columna de cajas del archivo del cliente "
+             "cuando ya viene calculada. Si no viene, se calcula a partir del número de "
+             "botellas vendidas y su contenido (750 ml para la mayoría de los productos, "
+             "200 ml para Loco 200)."),
+        ]
+
+        def _start_page():
+            self._page_num += 1
+            self._draw_header(c, subtitulo=subt)
+            self._draw_footer(c)
+            yy = self._body_top()
+            yy = self._draw_section_title(
+                c, "Notas Metodológicas",
+                "Guía de lectura — cómo se calculó cada bloque de este reporte", yy)
+            return yy - 4
+
+        min_bottom = FOOTER_HEIGHT_PT + self.MARGIN
+        cw = self.CONTENT_W
+        y = _start_page()
+        first_h2 = True
+
+        for kind, text in contenido:
+            if kind == "h2":
+                style = style_h2
+                prefix = ""
+                gap_before = 0 if first_h2 else 8
+                first_h2 = False
+            elif kind == "bullet":
+                style = style_bullet
+                prefix = "•  "
+                gap_before = 2
+            else:
+                style = style_body
+                prefix = ""
+                gap_before = 3
+
+            para = Paragraph(prefix + text, style)
+            avail = y - gap_before - min_bottom
+            w_, h_ = para.wrap(cw, avail)
+            if h_ > avail:
+                c.showPage()
+                y = _start_page()
+                gap_before = 0
+                avail = y - min_bottom
+                w_, h_ = para.wrap(cw, avail)
+            y -= gap_before
+            para.drawOn(c, self.MARGIN, y - h_)
+            y -= (h_ + 2)
+
+        c.showPage()
 
 
 # ---------------------------------------------------------------------------

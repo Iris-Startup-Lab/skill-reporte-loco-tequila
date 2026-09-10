@@ -33,43 +33,68 @@ Al activarse esta Skill, el agente **DEBE** seguir este protocolo de interacció
 
 El agente se presenta explicando claramente su función y los entregables que genera.
 
-1. **Si el usuario YA adjuntó datos CSV o especificó una ruta (`--datos-dir`)**: El agente procede directamente a generar el reporte con dichos datos.
+1. **Si el usuario YA adjuntó datos (CSV o Excel, con cualquier nombre de archivo) o especificó una ruta (`--datos-dir`)**: El agente procede directamente a generar el reporte con dichos datos.
 2. **Si el usuario NO ha adjuntado datos ni indicado ruta**: El agente realiza la **única** pregunta inicial (Paso 3).
 
 > 🚫 **REGLA CRÍTICA DE SINTAXIS Y VOCABULARIO**:
 > **NUNCA** uses frases como *"No veo archivos en tu carpeta de uploads"*, *"Tu carpeta de uploads está vacía"*, *"Sigo sin ver archivos en tu carpeta"*, ni asumas que existe un monitoreo automático en segundo plano. El agente NO busca ni monitorea carpetas de uploads en segundo plano; simplemente procesa los archivos adjuntos en el chat o la ruta indicada por el usuario.
 
-### Paso 2: CSVs Requeridos y Esquema Esperado
+### Paso 2: Qué Debe Contener el Archivo del Cliente (NO importa el nombre del archivo ni el idioma/formato exacto de las columnas)
 
-La skill lee **exactamente 2 CSVs** de la carpeta `--datos-dir` (o adjuntados por el usuario):
+> ⚠️ **El agente NUNCA debe pedirle al usuario que "adjunte `loco_actuals_enriquecido.csv`"
+> ni ningún otro nombre de archivo exacto.** Esos son solo los nombres del dataset de
+> muestra interno (`data_for_test_and_simulation/`). El cliente sube su Excel/CSV
+> **tal como lo exporta de su propio sistema** (facturación, ERP, punto de venta), con
+> cualquier nombre de archivo (ej. `"Reportes de ventas 2026 semana 34 OK.xlsx"`) y
+> cualquier encabezado de columna en el idioma/formato que use su sistema.
 
-| Archivo | Rol | ¿Obligatorio? |
+La skill necesita 1 o 2 archivos (Excel `.xlsx`/`.xls` o CSV):
+
+| Rol | ¿Obligatorio? | Cómo se detecta |
 | --- | --- | --- |
-| `loco_actuals_enriquecido.csv` | Ventas reales (actuals) | **Sí** |
-| `loco_actual_vs_plan_semanal.csv` | Plan/presupuesto vs real semanal | Opcional (sin él, no hay comparativos vs Plan) |
+| **Ventas reales** (facturación/actuals) | **Sí** | Cualquier archivo cuyo nombre contenga "venta", "actual", "reporte" o "enriquecido" (y no diga "plan"/"presupuesto") — o, si solo hay un archivo en la carpeta, ese mismo. |
+| **Plan / presupuesto** | Opcional (sin él, no hay comparativos vs Plan) | Cualquier archivo cuyo nombre contenga "plan", "presupuesto", "vs_plan" o "semanalizado". |
 
-#### Ejemplo de Dataset de Ventas Reales — `loco_actuals_enriquecido.csv`
+`scripts/data_processor.py` detecta el archivo por esas palabras clave en el **nombre
+del archivo** (no por un nombre exacto), y dentro de cada archivo reconoce las
+columnas por **contenido/significado**, no por un encabezado exacto — soporta
+mayúsculas/minúsculas, acentos y varios sinónimos comunes por columna. Lo que
+realmente necesita encontrar en el archivo de **ventas** es:
 
-Encabezado real (20 columnas). Las columnas **clave** que consume el reporte son
-`semana de venta`, `fecha de venta`, `SKU/producto`, `cliente`, `canal_reporte`,
-`region_o_estado`, `venta_sin_impuestos`, `botellas`, `cajas_9L`, `margen_pesos` y `anio`:
+| Concepto | Encabezados que el sistema ya reconoce (ejemplos) |
+| --- | --- |
+| Fecha de la venta | `fecha de venta`, `Fecha de Emisión`, `Fecha de Emision`, `fecha` |
+| Semana (si no hay fecha) | `Semana`, `semana`, `week` (acepta `"Semana 34"` o el número solo) |
+| Producto / SKU | `SKU`, `ARTÍCULO`, `Articulo`, `producto`, `Producto` |
+| Categoría de negocio | `Categoria`, `Categoría` (para distinguir venta de producto tequila de otros conceptos como Agave/Servicios — ver `metodologia_reporte.md`) |
+| Cliente | `Cliente`, `CLIENTE`, `Receptor`, `receptor` |
+| Canal comercial | `Canal / Reporte`, `canal`, `Canal`, `CANAL` |
+| Región / estado | `Ubicación`, `Ubicacion`, `Region`, `estado`, `Estado` |
+| Unidades vendidas | `Unidades`, `unidades`, `unidades_de_venta`, `cantidad` |
+| Precio unitario | `Importe`, `importe`, `precio`, `Precio` |
+| Venta sin impuestos | `Venta`, `venta`, `VENTA NETA (MXN)`, `subtotal` |
+| Venta con impuestos | `Monto`, `monto`, `Venta + IVA`, `total` |
+| Estatus de la factura | Cualquier columna con "estatus" o "status" en el nombre (se descartan filas `Cancelado` y filas de "Total" sin estatus) |
+| Cajas de 9L (opcional) | `Cajas 9 lts`, `cajas_9_lts` — si no viene, se calcula automáticamente |
+
+Si alguna columna no existe en absoluto, el sistema aplica un valor por defecto
+razonable (documentado en `metodologia_reporte.md`) en vez de fallar — pero mientras
+más de estas columnas traiga el archivo original, más preciso es el reporte.
+
+**Ejemplo real de un archivo de cliente válido** (encabezados tal como los exporta su
+sistema de facturación, sin ninguna transformación previa):
 
 ```csv
-semana de venta,fecha de venta,SKU/producto,unidades_de_venta,categoria_o_linea,cliente,canal,region_o_estado,precio_unitario,venta_con_impuestos,venta_sin_impuestos,anio,ml_botella,botellas,litros,cajas_9L,margen_pct,margen_pesos,sub_canal,canal_reporte
-2026-W30,2026-07-20,Loco Ámbar,30,Ámbar,La Europea,Off Trade,Jalisco,1256.08,66876.00,45000.00,2026,750,30,22.5,2.5,0.6,27000.00,Tradicional,Off Trade
-2026-W30,2026-07-21,Loco 269,25,Blanco,Bodegas Alianza,On Trade,CDMX,1450.00,72500.00,62000.00,2026,750,25,18.75,2.083,0.5,31000.00,Directo,On Trade
+Mes,Folio fiscal,Tipo Comprobante,Categoria,Semana,RFC,Receptor,Cajas 9 lts,Unidades,SKU,Precio unitario,Venta,IEPS,IVA,Fecha de Emisión,Estatus,Canal,Canal / Reporte,Cliente,Ubicación,Costo unitario,Margen
+8,f5a673e2-...,FACTURA,Producto (Botellas),Semana 34,DTO140207MW0,DOS CON TODO,0.25,3,Loco Blanco,1450.00,4350.00,652.50,696.00,2026-08-20,Vigente,On Trade,On Trade,Parker and Lenox,CDMX,518.20,2164.13
 ```
 
-#### Ejemplo de Dataset de Presupuesto/Plan — `loco_actual_vs_plan_semanal.csv`
+Para el **Plan/presupuesto** (opcional), el sistema reconoce columnas equivalentes
+(`ARTÍCULO`/SKU, `CANAL`, `UNIDADES`, `VENTA NETA (MXN)`, `COGS`, `SEMANA`, etc.) — no
+necesita traer el formato canónico interno tampoco.
 
-Encabezado real (21 columnas). Las columnas **clave** son `anio`, `semana de venta`,
-`SKU/producto`, `canal_reporte`, `plan_botellas`, `plan_cajas_9L`, `plan_venta_sin_impuestos`
-y `plan_margen_pesos`:
-
-```csv
-anio,semana de venta,fecha_lunes,SKU/producto,canal,canal_reporte,plan_unidades,plan_botellas,plan_cajas_9L,plan_venta_sin_impuestos,plan_venta_con_impuestos,plan_margen_pesos,actual_unidades,actual_botellas,actual_cajas_9L,actual_venta_sin,actual_venta_con,actual_margen,var_vs_plan_$,var_vs_plan_%,cumplimiento_%
-2026,2026-W30,2026-07-20,Loco 269,Off Trade,Off Trade,77,77,6.43,113846.49,202054.76,72861.76,74,74,6.17,107835.88,191387.11,69014.96,-6010.61,-5.3,94.7
-```
+Si el usuario tiene dudas de si su archivo sirve, la respuesta correcta es "sí, adjunta
+tu Excel/CSV tal como lo tengas" — nunca pedirle que lo renombre o reformatee primero.
 
 ### Paso 3: Preguntas de Aclaración Iniciales (MÁXIMO 2 PREGUNTAS)
 
@@ -77,10 +102,10 @@ El agente solo puede realizar **hasta 2 preguntas de aclaración** antes de gene
 
 #### 1. Pregunta 1: Fuente de Datos (solo si no se adjuntaron datos ni ruta)
 
-Si el usuario **no** ha adjuntado archivos CSV ni ha especificado una ruta de datos:
+Si el usuario **no** ha adjuntado archivos (CSV o Excel) ni ha especificado una ruta de datos:
 > *"¿Con qué datos genero el reporte?*
 >
-> 1. *Tus **datos propios CSV** (puedes adjuntarlos aquí en el chat o indicarme la ruta de la carpeta).*
+> 1. *Tus **datos propios** (Excel o CSV, tal como los exportas de tu sistema, con cualquier nombre de archivo — puedes adjuntarlos aquí en el chat o indicarme la ruta de la carpeta).*
 > 2. *Los **datos de muestra incluidos** (`data_for_test_and_simulation/` — Semana 30 de 2026).*
 
 #### 2. Pregunta 2: Periodo / Semana Base a Comparar (solo si el usuario no especificó semana y año)

@@ -326,7 +326,11 @@ class LocoReporteXLSX:
         ]
         _header_row(ws, 14, ["Indicador", "Variación %", "Estado", "Lectura"], start_col=1)
         for ri, (label, pct) in enumerate(semaforos, 15):
-            if pct < -10:
+            # "N/D" cuando no hay histórico del año anterior en los datos
+            # cargados (ver var()/year_b en get_resumen_ejecutivo).
+            if pct is None:
+                lectura = "N/D — sin histórico del año anterior en los datos cargados"
+            elif pct < -10:
                 lectura = "Atención: caída relevante — revisar causa raíz"
             elif pct < 0:
                 lectura = "Ligera baja — monitorear"
@@ -338,7 +342,8 @@ class LocoReporteXLSX:
                 lectura = "Crecimiento fuerte — identificar driver y replicar"
             ws.cell(row=ri, column=1, value=label).font = FONT_BODY
             ws.cell(row=ri, column=1).alignment = _align("left")
-            ws.cell(row=ri, column=2, value=f"{pct:+.1f}%").alignment = _align("right")
+            pct_display = "N/D" if pct is None else f"{pct:+.1f}%"
+            ws.cell(row=ri, column=2, value=pct_display).alignment = _align("right")
             ws.cell(row=ri, column=2).font = FONT_BODY
             _traffic_light(ws, ri, 3, pct)
             ws.cell(row=ri, column=4, value=lectura).font = FONT_SUB
@@ -555,13 +560,18 @@ class LocoReporteXLSX:
                     [labels[0], labels[1], "Variación $", "Variación %", "Tendencia"],
                     start_col=1)
 
-        vals = [actual, anterior, var_abs, var_pct / 100,
+        # "N/D" cuando no hay histórico del año anterior en los datos cargados
+        # (ver var()/year_b en get_resumen_ejecutivo) — evita división None/100.
+        var_pct_val = "N/D" if var_pct is None else var_pct / 100
+        vals = [actual, anterior, var_abs, var_pct_val,
                 "▲" if var_abs >= 0 else "▼"]
         _data_row(ws, start_row + 2, vals, cream=True, neg_cols=[3])
 
         for ci, fmt in [(1, FMT_CURRENCY), (2, FMT_CURRENCY),
                          (3, FMT_CURRENCY), (4, FMT_PCT1)]:
-            ws.cell(row=start_row + 2, column=ci).number_format = fmt
+            cell = ws.cell(row=start_row + 2, column=ci)
+            if not isinstance(cell.value, str):
+                cell.number_format = fmt
 
         crec_cell = ws.cell(row=start_row + 2, column=5)
         crec_cell.font = _font(bold=True,
@@ -1189,9 +1199,11 @@ class LocoReporteXLSX:
         ytd_pct = resumen["ytd_vs_ly"]["pct"]
         plan_pct = resumen["vs_plan"]["pct"]
 
+        ytd_pct_txt = "N/D (sin histórico del año anterior)" if ytd_pct is None else f"{ytd_pct:+.1f}%"
+        ytd_pasos_accion = "N/D" if ytd_pct is None else ("Sostener estrategia actual" if ytd_pct > 0 else "Revisar mix de producto y canal")
         pasos = [
             f"1. WoW: {wow_pct:+.1f}% — {'Mantener ritmo' if wow_pct > 0 else 'Investigar causa de caída'}",
-            f"2. YTD vs Año Ant.: {ytd_pct:+.1f}% — {'Sostener estrategia actual' if ytd_pct > 0 else 'Revisar mix de producto y canal'}",
+            f"2. YTD vs Año Ant.: {ytd_pct_txt} — {ytd_pasos_accion}",
             f"3. Cumplimiento de plan: {plan_pct:+.1f}% — {'OK' if plan_pct > -5 else 'Requiere plan de recuperación urgente'}",
             "4. Monitorear concentración de clientes — diversificar cartera si top 3 > 50%.",
             "5. Validar datos de mercado (CRT, exportaciones, precio agave) para contexto externo.",
@@ -1265,12 +1277,17 @@ class LocoReporteXLSX:
             cream = (ri == 5)
             tendencia = "mejora" if var_abs >= 0 else "baja"
             tend_color = TRAFFIC_GREEN if var_abs >= 0 else TRAFFIC_RED
-            _data_row(ws, ri, [met, va, vb, var_abs, var_pct / 100, tendencia],
+            # "N/D" si el año del periodo B no existe en los datos cargados
+            # (ver var()/year_b_ok en get_comparativo_custom) — evita
+            # división None/100.
+            var_pct_val = "N/D" if var_pct is None else var_pct / 100
+            _data_row(ws, ri, [met, va, vb, var_abs, var_pct_val, tendencia],
                       cream=cream, neg_cols=[4])
             ws.cell(row=ri, column=2).number_format = FMT_CURRENCY
             ws.cell(row=ri, column=3).number_format = FMT_CURRENCY
             ws.cell(row=ri, column=4).number_format = FMT_CURRENCY
-            ws.cell(row=ri, column=5).number_format = FMT_PCT1
+            if var_pct is not None:
+                ws.cell(row=ri, column=5).number_format = FMT_PCT1
             ws.cell(row=ri, column=6).font = _font(bold=True, color=tend_color, size=9)
 
         # --- Por Producto ---

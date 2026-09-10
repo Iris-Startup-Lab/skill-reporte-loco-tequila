@@ -12,6 +12,8 @@
 *.xlsb
 *.env
 .env
+.venv
+
 
 # Archivos de configuración
 *.ini

@@ -19,10 +19,17 @@ Generar de forma autónoma los tres entregables ejecutivos del reporte de ventas
 Para evitar preguntas innecesarias, el agente debe seguir estas reglas al activar la skill (MÁXIMO 2 PREGUNTAS INICIALES EN TOTAL):
 
 1. **Pregunta 1: Fuente de Datos (solo si no se adjuntaron datos ni ruta)**:
-   - Si el usuario **ya adjuntó archivos CSV** en el chat o **especificó una ruta de datos**, procede directamente con esos datos.
+   - Si el usuario **ya adjuntó archivos** (Excel o CSV, cualquier nombre) en el chat o **especificó una ruta de datos**, procede directamente con esos datos.
    - Si el usuario **no ha adjuntado datos ni indicado ruta**, haz únicamente esta pregunta:
-     *"¿Prefieres adjuntar/indicar la ruta de tus **datos propios CSV** o generar el reporte con los **datos de muestra** (`data_for_test_and_simulation/`)?"*
+     *"¿Prefieres adjuntar/indicar la ruta de tus **datos propios** (Excel o CSV, tal como los exportas de tu sistema) o generar el reporte con los **datos de muestra** (`data_for_test_and_simulation/`)?"*
    - 🚫 **REGLA CRÍTICA DE SINTAXIS**: NUNCA menciones frases como *"No veo archivos en tu carpeta de uploads"*, *"Tu carpeta de uploads está vacía"*, ni asumas que existe un monitoreo automático de carpetas. El agente no busca ni monitorea carpetas de uploads en segundo plano; simplemente procesa lo que el usuario adjunta en el chat o la ruta que indica.
+   - 🚫 **NUNCA pidas que el archivo se llame o se renombre a `loco_actuals_enriquecido.csv`
+     / `loco_actual_vs_plan_semanal.csv`** — esos son solo los nombres internos del
+     dataset de muestra. El sistema detecta el archivo de ventas/plan por palabras
+     clave en el nombre y reconoce las columnas por contenido, sin importar el
+     encabezado exacto ni el nombre del archivo. Ver SKILL.md, sección "Paso 2: Qué
+     Debe Contener el Archivo del Cliente" para el detalle completo de qué columnas
+     reconoce el sistema.
 2. **Pregunta 2: Periodo / Semana Base a Comparar (solo si el usuario no especificó semana y año)**:
    - Si el usuario **ya especificó la semana y año base** en su instrucción (ej. *"Genera el reporte de la semana 30 de 2026"*), usa esos valores sin preguntar.
    - Si el usuario **NO especificó la semana ni el año base** a analizar, pregunta:

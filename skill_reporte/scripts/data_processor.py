@@ -20,6 +20,7 @@ Columnas clave del CSV actual_vs_plan_semanal:
 
 import os
 import re
+import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -28,6 +29,14 @@ from typing import Optional, Dict, Tuple
 from design_tokens import (
     PRODUCT_ORDER, PRODUCT_DISPLAY_NAMES, CANAL_ORDER, CANAL_MAPPING
 )
+
+# Categoría de negocio (columna cruda "Categoria" del Excel del cliente) que
+# identifica ventas reales de producto tequila. Cualquier otro valor
+# (Agave, Servicios, KIT's, Refacturación, Venta Activo, Transformación de
+# Liquido, etc.) es venta real del negocio pero SIN presupuesto/Plan asociado
+# y sin SKU de producto — se agrupa como "Otros" en los desgloses por
+# producto y se marca como no comparable contra Plan (ver to_do.md).
+CATEGORIA_NEGOCIO_PRODUCTO = "producto (botellas)"
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +96,12 @@ EXPANDED_PRODUCT_MAPPING = {
     "Loco Ámbar":   "Loco Ambar",
     "Loco 269":     "Loco 269",
     "loco 269":     "Loco 269",
+    "Loco 269 ml":  "Loco 269",
+    "Loco 269 ML":  "Loco 269",
     "Loco Aureo":   "Loco Aureo",
     "Loco Áureo":   "Loco Aureo",
+    "Loco Áureo 2026": "Loco Aureo",
+    "Loco Aureo 2026": "Loco Aureo",
     "Loco 200":     "Loco 200",
     "Loco 200 ml":  "Loco 200",
     "Loco 200 ML":  "Loco 200",
@@ -151,6 +164,7 @@ def _infer_categoria(producto: str) -> str:
         "Loco 269": "Blanco",
         "Loco Aureo": "Áureo",
         "Loco 200": "Blanco",
+        "Otros": "Otros",
     }
     return cat_map.get(producto, "Blanco")
 
@@ -242,11 +256,22 @@ class LocoDataProcessor:
             self.dfp = self.df_plan.copy()
             return
 
-        # 1. Filtrar registros cancelados si existe columna de Estatus
+        # 1. Filtrar registros cancelados / filas de totales si existe columna de Estatus.
+        # Excel de clientes suele traer al final una fila de "Total" de la hoja
+        # (SKU, Folio y Categoria en blanco, pero con un monto de venta): esa fila
+        # no tiene Estatus "Vigente" ni "Cancelado" (queda vacía/NaN). Si detectamos
+        # que el valor "vigente" sí aparece en los datos, usamos lista blanca
+        # (== "vigente") para excluir tanto cancelados como esas filas de totales;
+        # si el archivo no usa esa terminología, mantenemos el filtro original
+        # (!= "cancelado") para no romper datasets de muestra/prueba.
         estatus_cols = [c for c in df.columns if "estatus" in c.lower() or "status" in c.lower()]
         if estatus_cols:
             c_est = estatus_cols[0]
-            df = df[df[c_est].astype(str).str.strip().str.lower() != "cancelado"].copy()
+            estatus_norm = df[c_est].astype(str).str.strip().str.lower()
+            if (estatus_norm == "vigente").any():
+                df = df[estatus_norm == "vigente"].copy()
+            else:
+                df = df[estatus_norm != "cancelado"].copy()
 
         # 2. Fecha y Año
         fecha_cols = [c for c in df.columns if c in ["fecha de venta", "Fecha de Emisión", "Fecha de Emision", "fecha", "Fecha"]]
@@ -378,13 +403,86 @@ class LocoDataProcessor:
             else:
                 df["venta_con_impuestos"] = df["venta_sin_impuestos"] * 1.53
 
+        # 9b. Categoría de negocio real (columna cruda "Categoria" del Excel del
+        # cliente, distinta de "categoria_o_linea" que es la línea de producto
+        # Blanco/Ámbar/Áureo). Identifica qué filas son venta real de producto
+        # tequila ("Producto (Botellas)") vs. otros conceptos del negocio
+        # (Agave, Servicios, KIT's, Refacturación, Venta Activo, Transformación
+        # de Liquido, etc.) que no tienen SKU de producto ni Plan presupuestado.
+        cat_neg_cols = [c for c in df.columns if c.strip().lower() in ("categoria", "categoría")]
+        if cat_neg_cols:
+            df["categoria_negocio"] = (
+                df[cat_neg_cols[0]].fillna(CATEGORIA_NEGOCIO_PRODUCTO.title()).astype(str).str.strip()
+            )
+        else:
+            df["categoria_negocio"] = "Producto (Botellas)"
+
+        # Salvaguarda: si el SKU/producto vino vacío (típico de una fila de
+        # totales que ninguna regla de Estatus haya detectado), nunca debe
+        # quedar como el string literal "nan" — se agrupa también como "Otros".
+        sku_vacio = df["producto"].astype(str).str.strip().str.lower() == "nan"
+
+        df["comparable_plan"] = (
+            df["categoria_negocio"].str.strip().str.lower() == CATEGORIA_NEGOCIO_PRODUCTO
+        ) & ~sku_vacio
+
+        # Todo lo que no sea venta de producto tequila catalogado se agrupa como
+        # "Otros" en los desgloses/gráficas por producto (Ranking, matriz
+        # Canal x Producto, etc.) en vez de desaparecer silenciosamente por el
+        # reindex a PRODUCT_ORDER (ver to_do.md). El detalle original de qué
+        # concepto de negocio era queda preservado en "categoria_negocio".
+        df.loc[~df["comparable_plan"], "producto"] = "Otros"
+
+        # Salvaguarda: un SKU real de "Producto (Botellas)" que no matchea
+        # EXPANDED_PRODUCT_MAPPING (typo, variante nueva) no debe desaparecer
+        # silenciosamente por el reindex a PRODUCT_ORDER. Se agrupa también en
+        # "Otros" y se deja constancia en consola con su venta, para que se
+        # agregue el alias correcto en EXPANDED_PRODUCT_MAPPING (ver to_do.md).
+        sin_mapear = df["comparable_plan"] & ~df["producto"].isin(PRODUCT_ORDER)
+        if sin_mapear.any():
+            resumen_sin_mapear = (
+                df[sin_mapear]
+                .groupby("producto")["venta_sin_impuestos"]
+                .agg(["sum", "count"])
+                .sort_values("sum", ascending=False)
+            )
+            print("[ADVERTENCIA] SKUs de producto sin mapear en EXPANDED_PRODUCT_MAPPING "
+                  "(agrupados como 'Otros' para no perder la venta; agregar alias correcto):")
+            print(resumen_sin_mapear.to_string())
+            df.loc[sin_mapear, "producto"] = "Otros"
+
+        # Mismo problema que con "producto": un canal_norm que no esté en
+        # CANAL_ORDER se pierde silenciosamente en cualquier tabla/gráfica que
+        # haga piv.reindex(CANAL_ORDER) (ej. matriz Canal x Producto). Se
+        # agrupa como "Otros" para no perder la venta, y se deja advertencia
+        # en consola para poder agregar el alias correcto en CANAL_MAPPING.
+        canal_sin_mapear = ~df["canal_norm"].isin(CANAL_ORDER)
+        if canal_sin_mapear.any():
+            resumen_canal_sin_mapear = (
+                df[canal_sin_mapear]
+                .groupby("canal_norm")["venta_sin_impuestos"]
+                .agg(["sum", "count"])
+                .sort_values("sum", ascending=False)
+            )
+            print("[ADVERTENCIA] Canales sin mapear en CANAL_MAPPING "
+                  "(agrupados como 'Otros' para no perder la venta; agregar alias correcto):")
+            print(resumen_canal_sin_mapear.to_string())
+            df.loc[canal_sin_mapear, "canal_norm"] = "Otros"
+
         # 10. Volumetría: ml_botella, litros, cajas_9L
         if "ml_botella" not in df.columns:
             df["ml_botella"] = df["SKU/producto"].apply(lambda s: 200 if "200" in str(s) else 750)
         if "litros" not in df.columns:
             df["litros"] = df["botellas"] * df["ml_botella"] / 1000.0
         if "cajas_9L" not in df.columns:
-            df["cajas_9L"] = df["litros"] / 9.0
+            # Preferir la columna cruda del cliente si ya la trae calculada
+            # (ej. "Cajas 9 lts") en vez de recalcularla con el supuesto
+            # ml_botella/9000, que es solo una aproximación.
+            caj_cols = [c for c in df.columns if c.strip().lower() in ("cajas 9 lts", "cajas_9_lts", "cajas 9l", "cajas_9l")]
+            if caj_cols:
+                df["cajas_9L"] = pd.to_numeric(df[caj_cols[0]], errors="coerce").fillna(df["litros"] / 9.0)
+            else:
+                df["cajas_9L"] = df["litros"] / 9.0
 
         # 11. Sub-canal
         if "sub_canal" not in df.columns:
@@ -553,7 +651,7 @@ class LocoDataProcessor:
         cajas = df["cajas_9L"].sum()
         margen = df["margen_pesos"].sum()
         margen_pct = (margen / ventas * 100) if ventas > 0 else 0
-        ticket = (ventas / botellas) if botellas > 0 else 0
+        ticket = math.ceil(ventas / botellas) if botellas > 0 else 0
         return {
             "ventas_netas": ventas,
             "botellas": botellas,
@@ -576,7 +674,7 @@ class LocoDataProcessor:
             "margen_pesos": margen,
             # Simétrico con _kpis: permite comparar todas las métricas vs plan
             "margen_pct": (margen / ventas * 100) if ventas > 0 else 0,
-            "ticket_promedio": (ventas / botellas) if botellas > 0 else 0,
+            "ticket_promedio": math.ceil(ventas / botellas) if botellas > 0 else 0,
         }
 
     # ------------------------------------------------------------------
@@ -607,9 +705,19 @@ class LocoDataProcessor:
         ytd_cur  = self._kpis(self._filter_ytd(y, w))
         ytd_prev = self._kpis(self._filter_ytd(ly, lyw))
 
-        def var(a, b, key="ventas_netas"):
+        def var(a, b, key="ventas_netas", year_b: Optional[int] = None):
             va, vb = a.get(key, 0), b.get(key, 0)
             d = va - vb
+            # Si el periodo "b" cae en un año que no existe en absoluto en los
+            # datos cargados (p. ej. el cliente solo mandó 2026, sin histórico
+            # 2025), no hay base real de comparación: reportar "pct" como
+            # "N/D" (None) en vez de un falso "+100%" por división entre cero.
+            # "abs" se conserva numérico (0 real, ya que efectivamente no hubo
+            # venta ese año) para no romper reconstrucciones tipo
+            # "anterior = actual - abs" en PDF/XLSX. Ver
+            # reporte_diagnostico_columnas_datos_cliente.md sección 4.1 / 6.2-G.
+            if year_b is not None and not self._year_exists(year_b):
+                return {"abs": d, "pct": None, "nd": True}
             p = (d / vb * 100) if vb != 0 else (100.0 if va > 0 else 0.0)
             return {"abs": d, "pct": p}
 
@@ -624,13 +732,19 @@ class LocoDataProcessor:
             "anio_anterior": lasty,
             "vs_plan": var(cur, plan),
             "vs_semana_anterior": var(cur, prev),
-            "vs_anio_anterior": var(cur, lasty),
+            "vs_anio_anterior": var(cur, lasty, year_b=ly),
             "mes_actual": mes_act,
             "mes_vs_anterior": var(mes_act, mes_prev),
-            "mes_vs_ly": var(mes_act, mes_ly),
+            "mes_vs_ly": var(mes_act, mes_ly, year_b=ly),
             "ytd_actual": ytd_cur,
-            "ytd_vs_ly": var(ytd_cur, ytd_prev),
+            "ytd_vs_ly": var(ytd_cur, ytd_prev, year_b=ly),
         }
+
+    def _year_exists(self, year: int) -> bool:
+        """True si hay al menos una fila de datos reales (self.df) para ese año."""
+        if self.df.empty or "anio_num" not in self.df.columns:
+            return False
+        return bool((self.df["anio_num"] == year).any())
 
     # ------------------------------------------------------------------
     # Público: Tabla resumen canal × producto
@@ -945,6 +1059,11 @@ class LocoDataProcessor:
         else:
             df = self._filter_ytd(y, w)
 
+        # "Nacional" es el cajón por defecto cuando una fila no trae región/estado
+        # (columna ausente o celda vacía) — no es una región real y no debe
+        # aparecer en el Top Regiones/Estados.
+        df = df[df["region_o_estado"] != "Nacional"]
+
         agg = (
             df.groupby("region_o_estado")
             .agg(
@@ -977,7 +1096,7 @@ class LocoDataProcessor:
             c = dfs["cajas_9L"].sum()
             m = dfs["margen_pesos"].sum()
             mp = (m / v * 100) if v > 0 else 0
-            t = (v / b) if b > 0 else 0
+            t = math.ceil(v / b) if b > 0 else 0
             return {"ventas": v, "botellas": b, "cajas": c,
                     "margen_pesos": m, "margen_pct": mp, "ticket": t}
 
@@ -1009,7 +1128,7 @@ class LocoDataProcessor:
                 "cajas": plan_c,
                 "margen_pesos": plan_m,
                 "margen_pct": (plan_m / plan_v * 100) if plan_v > 0 else 0,
-                "ticket": (plan_v / plan_b) if plan_b > 0 else 0,
+                "ticket": math.ceil(plan_v / plan_b) if plan_b > 0 else 0,
             },
             "ytd": ytd,
             "ytd_anio_anterior": ytd_ly,
@@ -1054,16 +1173,16 @@ class LocoDataProcessor:
                 "recomendacion": "Activar plan de recuperación en canales de mayor gap",
             })
 
-        # YTD vs año anterior
+        # YTD vs año anterior (omitir si no hay histórico del año anterior: "N/D")
         ytd_var = resumen["ytd_vs_ly"]
-        if ytd_var["pct"] > 5:
+        if ytd_var["pct"] is not None and ytd_var["pct"] > 5:
             items.append({
                 "hallazgo": f"YTD crece {ytd_var['pct']:.0f}% vs mismo período año anterior",
                 "tipo": "Oportunidad",
                 "impacto": f"${ytd_var['abs']:,.0f} MXN acumulados adicionales",
                 "recomendacion": "Sostener ritmo; monitorear capacidad operativa",
             })
-        elif ytd_var["pct"] < -5:
+        elif ytd_var["pct"] is not None and ytd_var["pct"] < -5:
             items.append({
                 "hallazgo": f"YTD cae {abs(ytd_var['pct']):.0f}% vs mismo período año anterior",
                 "tipo": "Riesgo",
@@ -1106,6 +1225,7 @@ class LocoDataProcessor:
             "venta_sin_impuestos", "botellas", "cajas_9L",
             "margen_pesos", "margen_pct", "precio_unitario",
             "anio_num", "semana_num",
+            "comparable_plan", "categoria_negocio",
         ]
         df_out = self.df[cols].copy()
         df_out.columns = [
@@ -1114,6 +1234,7 @@ class LocoDataProcessor:
             "venta_sin_iva", "botellas", "cajas_9l",
             "margen_pesos", "margen_pct", "precio_unitario",
             "anio", "semana_num",
+            "comparable_plan", "categoria_negocio",
         ]
         df_out["producto_display"] = df_out["producto"].map(PRODUCT_DISPLAY_NAMES).fillna(df_out["producto"])
         return df_out
@@ -1148,9 +1269,18 @@ class LocoDataProcessor:
         kpis_a = self._kpis(df_a)
         kpis_b = self._kpis(df_b)
 
-        # Variaciones
+        # Variaciones. Igual que en get_resumen_ejecutivo(): si el año del
+        # periodo B no existe en absoluto en los datos cargados, no hay base
+        # real de comparación y "pct" debe ser None ("N/D") en vez de un
+        # falso "+100%" por división entre cero. "abs" se mantiene siempre
+        # numérico. Ver metodologia_reporte.md sección 3.
+        anio_b = periodo_b.get("anio")
+        year_b_ok = self._year_exists(anio_b) if anio_b is not None else True
+
         def var(a_val, b_val):
             d = a_val - b_val
+            if not year_b_ok:
+                return {"abs": d, "pct": None}
             p = (d / b_val * 100) if b_val != 0 else (100.0 if a_val > 0 else 0.0)
             return {"abs": d, "pct": p}
 

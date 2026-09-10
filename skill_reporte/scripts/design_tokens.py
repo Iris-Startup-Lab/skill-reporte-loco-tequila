@@ -26,9 +26,14 @@ PRODUCT_COLORS = {
     "Loco 269":         "#1F1F1F",   # negro
     "Loco Aureo":       "#1F6E6E",   # teal/verde azulado
     "Loco 200":         "#F2C14E",   # amarillo/dorado
+    "Otros":            "#5C5C5C",   # gris oscuro neutro — Agave/Servicios/KIT's/etc.
 }
 
-# Orden canónico de productos (para índices de tabla y gráfica)
+# Orden canónico de productos (para índices de tabla y gráfica).
+# "Otros" agrupa venta real del negocio sin SKU de producto tequila
+# (Agave, Servicios, KIT's, Refacturación, Venta Activo, Transformación de
+# Liquido, etc.) — no tiene Plan presupuestado, ver CATEGORIA_NEGOCIO_PRODUCTO
+# en data_processor.py.
 PRODUCT_ORDER = [
     "Loco Blanco",
     "Puro Corazon",
@@ -36,6 +41,7 @@ PRODUCT_ORDER = [
     "Loco 269",
     "Loco Aureo",
     "Loco 200",
+    "Otros",
 ]
 
 # Nombres de display en español (como aparecen en el PDF)
@@ -46,6 +52,7 @@ PRODUCT_DISPLAY_NAMES = {
     "Loco 269":     "Loco 269",
     "Loco Aureo":   "Loco Áureo",
     "Loco 200":     "Loco 200",
+    "Otros":        "Otros",
 }
 
 # ---------------------------------------------------------------------------
@@ -57,14 +64,18 @@ CANAL_COLORS = {
     "Venta Directa":                "#E8A33D",   # naranja/ámbar
     "eCommerce":                    "#5A5A5A",   # gris oscuro
     "Familia y Amigos":             "#2E6E6E",   # teal
+    "Otros":                        "#5C5C5C",   # gris oscuro neutro — canales no catalogados
 }
 
+# "Otros" agrupa canal_norm que no matchea ningún canal canónico (variante o
+# etiqueta interna nueva no mapeada en CANAL_MAPPING) — ver data_processor.py.
 CANAL_ORDER = [
     "Off Trade",
     "Centros de Consumo (On Trade)",
     "Venta Directa",
     "eCommerce",
     "Familia y Amigos",
+    "Otros",
 ]
 
 # Mapeo de valores en el CSV → nombre canónico de canal
@@ -89,6 +100,7 @@ CANAL_MAPPING = {
     "On Trade":                       "Centros de Consumo (On Trade)",
     "ON TRADE":                       "Centros de Consumo (On Trade)",
     "Venta Directa On Trade":         "Centros de Consumo (On Trade)",
+    "Venta Directa Off Trade":        "Off Trade",
     "eCommerce":                      "eCommerce",
     "E-Commerce":                     "eCommerce",
     "Familia y Amigos":               "Familia y Amigos",
@@ -135,8 +147,12 @@ def fmt_currency(value, decimals: int = 0) -> str:
 
 
 def fmt_pct(value, decimals: int = 0) -> str:
-    """Formatea un porcentaje: 47%"""
-    if value is None or (isinstance(value, float) and value != value):
+    """Formatea un porcentaje: 47%. None = sin base de comparación (histórico
+    inexistente): "N/D", en vez del engañoso "0%" o "+100%" por división entre
+    cero — ver var() en data_processor.py."""
+    if value is None:
+        return "N/D"
+    if isinstance(value, float) and value != value:
         return "0%"
     try:
         return f"{value:.{decimals}f}%"
@@ -155,13 +171,13 @@ def fmt_int(value) -> str:
 
 
 def fmt_ticket(value) -> str:
-    """Ticket promedio con 1 decimal: $1.4"""
+    """Ticket promedio redondeado a la alza, sin decimales: $2,945"""
     if value is None or (isinstance(value, float) and value != value):
-        return "$0.0"
+        return "$0"
     try:
-        return f"${value:.1f}"
+        return f"${int(round(value)):,}"
     except (TypeError, ValueError):
-        return "$0.0"
+        return "$0"
 
 
 def hex_to_rgb(hex_color: str):
