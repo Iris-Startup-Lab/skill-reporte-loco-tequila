@@ -363,6 +363,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       --bg:                #F5F5F5;
       --card-bg:           #FFFFFF;
       --text:              #222222;
+      --header-height:     86px;
     }}
 
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -537,12 +538,22 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     /* ── Main layout ── */
     main {{ padding: 20px 32px; max-width: 1600px; margin: 0 auto; }}
 
-    /* ── KPI cards ── */
+    /* ── KPI cards (Sticky) ── */
+    .kpi-sticky-container {{
+      position: sticky;
+      top: var(--header-height, 86px);
+      z-index: 450;
+      background: var(--bg);
+      padding: 8px 0 14px 0;
+      margin-top: -8px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+    }}
     .kpi-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
       gap: 14px;
-      margin-bottom: 22px;
+      margin-bottom: 0;
     }}
     .kpi-card {{
       background: var(--card-bg);
@@ -870,8 +881,10 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
   <section class="tab-content" id="tab-general">
   <main>
-  <!-- KPIs -->
-  <div class="kpi-grid" id="kpiGrid"></div>
+  <!-- KPIs (Sticky) -->
+  <div class="kpi-sticky-container">
+    <div class="kpi-grid" id="kpiGrid"></div>
+  </div>
 
   <!-- Charts row 1 -->
   <div class="charts-grid">
@@ -994,8 +1007,10 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
        proc._filter_period/_filter_ytd), NO recalculada desde DATA.tabla. -->
   <section class="tab-content" id="tab-comparativo8" hidden>
   <main>
-  <!-- KPIs (repetidos a pedido del cliente en cada pestaña nueva) -->
-  <div class="kpi-grid" id="kpiGrid_comparativo8"></div>
+  <!-- KPIs (repetidos a pedido del cliente en cada pestaña nueva, Sticky) -->
+  <div class="kpi-sticky-container">
+    <div class="kpi-grid" id="kpiGrid_comparativo8"></div>
+  </div>
 
   <div class="table-card">
     <div class="table-header">
@@ -1131,7 +1146,13 @@ let canalViewMode = 'values';
 const stackedTotalLabelsPlugin = {{
   id: 'stackedTotalLabels',
   afterDatasetsDraw(chart) {{
-    const cfg = chart.options.plugins && chart.options.plugins.stackedTotalLabels;
+    // OJO: `chart.options` es un objeto "resuelto" por Chart.js (proxy de
+    // scriptable options) — leer una propiedad de función ahí (`formatter`)
+    // hace que Chart.js la invoque solo con SU contexto interno antes de
+    // devolverla, y esa auto-invocación revienta con "Cannot convert object
+    // to primitive value" al intentar usar ese contexto como número. Hay que
+    // leer la config cruda sin resolver desde `chart.config.options`.
+    const cfg = chart.config.options.plugins && chart.config.options.plugins.stackedTotalLabels;
     if (!cfg || !cfg.enabled) return;
     const datasets = chart.data.datasets;
     if (!datasets || datasets.length === 0) return;
@@ -1264,7 +1285,16 @@ function renderComparativo8Table(groupKey, tbodyId) {{
 }}
 
 // ── Inicialización ───────────────────────────────────────────────────────
+function updateStickyOffset() {{
+  const hdr = document.querySelector('header');
+  if (hdr) {{
+    document.documentElement.style.setProperty('--header-height', hdr.offsetHeight + 'px');
+  }}
+}}
+window.addEventListener('resize', updateStickyOffset);
+
 document.addEventListener('DOMContentLoaded', () => {{
+  updateStickyOffset();
   document.getElementById('headerSubtitle').textContent =
     `${{DATA.meta.semana_label}} · Dashboard Ejecutivo`;
 
@@ -1624,6 +1654,12 @@ function renderChartsDynamic(records) {{
   const planSem    = planSeries(sortedWeeks);
   const lySem      = lastYearSeries(sortedWeeks);
   const hasLY      = lySem.some(v => v !== null);
+  // La línea de Plan solo tiene sentido cuando se está viendo el subconjunto
+  // "Comparables a Plan": si el usuario eligió "No Comparables con Plan",
+  // esa venta (Agave, Servicios, etc.) nunca estuvo contemplada en el Plan,
+  // así que mostrar la línea sería comparar contra algo que no le aplica.
+  const compFilterVal = document.getElementById('fComparablePlan').value;
+  const showPlanLine  = compFilterVal !== 'no_comparables';
 
   // 1. Ventas Semanales + Plan + Año Anterior (línea gris)
   chartFactories.semanal = () => ({{
@@ -1639,7 +1675,7 @@ function renderChartsDynamic(records) {{
           borderWidth: 1,
           order: 2,
         }},
-        planDataset(planSem),
+        ...(showPlanLine ? [planDataset(planSem)] : []),
         ...(hasLY ? [lastYearDataset(lySem)] : []),
       ]
     }},
@@ -1664,7 +1700,7 @@ function renderChartsDynamic(records) {{
           stack: 'prod',
           order: 2,
         }})),
-        planDataset(planSem),
+        ...(showPlanLine ? [planDataset(planSem)] : []),
         ...(hasLY ? [lastYearDataset(lySem)] : []),
       ]
     }},

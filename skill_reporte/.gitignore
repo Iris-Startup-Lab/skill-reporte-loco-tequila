@@ -22,7 +22,9 @@
 *.config
 *.yaml
 *.yml
-s__pycache__/
+__pycache__/
+.claude/
 output/
 # Carpetas no deseadas
 datos_reales_cliente/
+testing_client_data/

@@ -31,10 +31,31 @@ Al activarse esta Skill, el agente **DEBE** seguir este protocolo de interacció
 
 ### Paso 1: Presentación e Identificación de Datos
 
-El agente se presenta explicando claramente su función y los entregables que genera.
-
-1. **Si el usuario YA adjuntó datos (CSV o Excel, con cualquier nombre de archivo) o especificó una ruta (`--datos-dir`)**: El agente procede directamente a generar el reporte con dichos datos.
-2. **Si el usuario NO ha adjuntado datos ni indicado ruta**: El agente realiza la **única** pregunta inicial (Paso 3).
+> 🚫 **NUNCA arranques directo con la pregunta de datos** (ej. *"No hay archivos
+> adjuntos... necesito una cosa antes de arrancar"*). Antes de preguntar nada, el
+> agente **SIEMPRE** se presenta primero — en el **mismo mensaje**, no en dos turnos
+> separados — explicando en 2-3 líneas qué es esta skill y qué entrega, y solo
+> entonces hace la(s) pregunta(s) que falten (Paso 3). Plantilla sugerida (puedes
+> adaptar el tono, pero conserva el propósito y los 3 entregables):
+>
+> *"👋 Genero el **reporte semanal de ventas y margen de Loco Tequila** en 3
+> formatos a partir de tus datos: un **PDF ejecutivo** (~40 págs. con tablas y
+> gráficas), un **Excel analítico** (7 hojas) y un **Dashboard HTML** interactivo
+> con filtros y descarga de CSV/PNG. Incluyo automáticamente 4 comparativos
+> (semana anterior, año anterior, acumulado del año y rolling 52 semanas) y
+> contexto de mercado (CRT, agave, NOM-006)."*
+>
+> Después de esa presentación (mismo mensaje), continúa con lo que corresponda:
+>
+> 1. **Si el usuario YA adjuntó datos (CSV o Excel, con cualquier nombre de
+>    archivo) o especificó una ruta (`--datos-dir`)**: agrega una línea confirmando
+>    que procede a generar el reporte con esos datos (sin preguntar nada más de
+>    fuente de datos).
+> 2. **Si el usuario NO ha adjuntado datos ni indicado ruta**: agrega la pregunta
+>    de fuente de datos (Paso 3, Pregunta 1) al final del mismo mensaje.
+> 3. Si además falta la semana/año, agrega también la Pregunta 2 (Paso 3) en ese
+>    mismo mensaje — **máximo 2 preguntas en total, pero la presentación no cuenta
+>    como pregunta.**
 
 > 🚫 **REGLA CRÍTICA DE SINTAXIS Y VOCABULARIO**:
 > **NUNCA** uses frases como *"No veo archivos en tu carpeta de uploads"*, *"Tu carpeta de uploads está vacía"*, *"Sigo sin ver archivos en tu carpeta"*, ni asumas que existe un monitoreo automático en segundo plano. El agente NO busca ni monitorea carpetas de uploads en segundo plano; simplemente procesa los archivos adjuntos en el chat o la ruta indicada por el usuario.

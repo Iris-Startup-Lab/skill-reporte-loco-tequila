@@ -231,6 +231,67 @@ contenido esperado con ejemplos reales, no nombres de archivo) y `AGENTS.md` (re
 explícita de no pedir renombrar archivos), para que ningún agente vuelva a repetir
 ese error.
 
+## Corrección adicional — la skill arrancaba muy seca (sin presentarse)
+
+Detectado por Fernando (captura de pantalla): al activar `/reporte-loco-tequila` sin
+datos adjuntos, el agente iba directo a "No hay archivos adjuntos... necesito una
+cosa antes de arrancar", sin explicar qué hace la skill. Se agregó en `SKILL.md`
+("Paso 1: Presentación e Identificación de Datos") una plantilla obligatoria de
+presentación (propósito + 3 entregables + comparativos automáticos) que el agente
+debe usar en el **mismo mensaje** antes de la(s) pregunta(s) — la presentación no
+cuenta como una de las 2 preguntas permitidas.
+
+## Corrección adicional — "Uncaught TypeError: Cannot convert object to primitive value" al abrir el Dashboard HTML
+
+Detectado por Fernando al abrir el HTML. No se reproducía con el JS aislado ni con un
+Chart.js simulado; se diagnosticó cargando el Dashboard real en un Chromium headless
+(Playwright) con la consola instrumentada, lo que dio el stack trace exacto.
+
+**Causa:** el plugin `stackedTotalLabelsPlugin` (datalabels en miles de "Ventas por
+Canal por Semana", agregado en esta misma sesión) leía su configuración con
+`chart.options.plugins.stackedTotalLabels` — pero `chart.options` en Chart.js es un
+objeto **ya resuelto** (proxy de "scriptable options"): al acceder a la propiedad
+`formatter` (una función), Chart.js la **auto-ejecuta con su propio contexto interno**
+antes de devolverla. Nuestro `formatter` recibía entonces ese objeto de contexto en
+vez del total numérico esperado, y `v / 1000` no podía convertir el objeto a número
+→ exactamente el error reportado.
+
+**Fix** (`scripts/dashboard_generator.py`, plugin `stackedTotalLabelsPlugin`): leer la
+configuración cruda sin resolver desde `chart.config.options.plugins.stackedTotalLabels`
+en vez de `chart.options.plugins...`. Verificado con Chart.js real en Chromium headless
+(carga inicial + cambio de pestañas + toggle % del canal) contra datos reales del
+cliente y el dataset de muestra: sin errores de consola.
+
+**Nota aparte (no es bug, solo fragilidad de red)**: el Dashboard carga Chart.js desde
+`cdn.jsdelivr.net`. Si el navegador de quien abre el HTML no tiene salida a internet o
+un proxy/firewall bloquea ese dominio, las gráficas no cargan (`Chart is not defined`)
+aunque el resto del dashboard funcione. No se tocó en esta sesión — evaluar si conviene
+seguir dependiendo de un CDN externo para un reporte pensado como "standalone".
+
+## Corrección adicional — Línea de "Plan $" seguía apareciendo en "No Comparables con Plan"
+
+**Reporte del usuario**: en el filtro "Comparables a Plan" del Dashboard, al
+seleccionar "No Comparables con Plan" la línea roja de Plan seguía dibujándose sobre
+las gráficas "Ventas Semanales" y "Ventas por Producto por Semana" (screenshot
+adjunto). La idea es que esa línea solo aparezca cuando el filtro está en
+"Comparables a Plan".
+
+**Causa**: `chartFactories.semanal` y `chartFactories.producto`
+(`scripts/dashboard_generator.py`) agregaban `planDataset(planSem)` de forma
+incondicional, sin revisar el valor del `<select id="fComparablePlan">`.
+
+**Fix**: se lee `document.getElementById('fComparablePlan').value` dentro de
+`renderChartsDynamic()` y se calcula `showPlanLine = compFilterVal !== 'no_comparables'`;
+ambos charts ahora incluyen `planDataset(...)` solo si `showPlanLine` es verdadero
+(spread condicional `...(showPlanLine ? [planDataset(planSem)] : [])`). El modal de
+gráfica ampliada y la descarga de imágenes reutilizan la misma `chartFactories[key]()`,
+así que heredan el fix sin cambios adicionales.
+
+**Verificado** con Chromium headless (Playwright) sobre datos reales del cliente:
+con "Comparables a Plan" ambos charts muestran el dataset `"Plan $"`; al cambiar a
+"No Comparables con Plan" desaparece de los dos; al regresar a "Comparables a Plan"
+reaparece. Sin errores de consola en ningún estado.
+
 ## Pendiente / fuera de alcance de esta sesión
 - Confirmar con el cliente si "No Comparables con Plan" debe quedarse como un solo
   bucket (Agave + Servicios + Refacturación + Venta Activo + Transformación de
