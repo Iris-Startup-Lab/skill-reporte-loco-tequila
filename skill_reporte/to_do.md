@@ -292,6 +292,20 @@ con "Comparables a Plan" ambos charts muestran el dataset `"Plan $"`; al cambiar
 "No Comparables con Plan" desaparece de los dos; al regresar a "Comparables a Plan"
 reaparece. Sin errores de consola en ningún estado.
 
+## Corrección adicional — Tabs fijas, Tarjetas de KPI con scroll normal, Comparativo 8 Columnas Filtrable y por Territorio
+
+**Reporte del usuario**:
+1. Las tarjetas de valores estaban fijas (`sticky`), lo cual ocupaba demasiado espacio vertical en pantalla; deben volver a flujo normal con scroll.
+2. La barra de pestañas ("Dashboard General" y "Comparativo 8 Columnas") es lo que debe permanecer fijo (`position: sticky`) debajo del header al hacer scroll.
+3. El "Comparativo 8 Columnas" debe ser filtrable y reaccionar a los filtros del panel lateral.
+4. Se necesita una nueva tabla de comparativo 8 columnas por Territorio (estado/región).
+
+**Solución**:
+- **CSS**: Se removió `position: sticky` y `box-shadow` de `.kpi-sticky-container`, permitiendo que las tarjetas de métricas hagan scroll natural sin tapar el contenido. Se agregó `position: sticky; top: var(--header-height, 86px); z-index: 490;` a `.tab-nav` con sombra sutil para fijar la navegación de pestañas al hacer scroll.
+- **Comparativo 8 Columnas dinámico y filtrable**: Se implementó `computeComparativo8(groupKey)` en JS (`scripts/dashboard_generator.py`), calculando dinámicamente `actual`, `anio_anterior`, `plan`, variaciones vs Plan ($ y %) y vs Año Anterior ($ y %) respetando los filtros de Año, Semana, Producto, Canal, Estado/Territorio, Cliente, Comparables a Plan y la modalidad (Semanal vs Anual YTD). Se enlaza a `updateDashboard()` para que cualquier cambio de filtro en el panel actualice inmediatamente las tablas.
+- **Comparativo 8 Columnas por Territorio**: Se agregó la tabla "Por Territorio" (`#comp8TableTerritorio`) tanto en la pre-generación en Python (`_build_comparativo_8col`) como en el motor de recálculo dinámico en JS (`computeComparativo8('territorio')`), ordenando los estados de mayor a menor venta actual e incluyendo la fila de Total.
+- **Validación**: Pruebas de sintaxis JS en Node y recálculo con filtros cruzados verificaron cuadratura al centavo entre Producto, Canal y Territorio, y generación limpia de los 3 formatos (PDF, XLSX y HTML).
+
 ## Pendiente / fuera de alcance de esta sesión
 - Confirmar con el cliente si "No Comparables con Plan" debe quedarse como un solo
   bucket (Agave + Servicios + Refacturación + Venta Activo + Transformación de

@@ -616,6 +616,12 @@ class LocoReportePDF:
             self._draw_page_totales(c, group_by="canal", mode=mode)
             c.showPage()
 
+        # Páginas: Totales por Territorio (Semanal + Anual)
+        for mode in ["semanal", "anual"]:
+            self._page_num += 1
+            self._draw_page_totales(c, group_by="territorio", mode=mode)
+            c.showPage()
+
         # Páginas 8-19: SKUs individuales
         for prod in PRODUCT_ORDER:
             for mode in ["semanal", "anual"]:
@@ -1377,11 +1383,18 @@ class LocoReportePDF:
         self._embed_png(c, chart_png, self.MARGIN, y - chart_h, self.CONTENT_W, chart_h)
 
     # ------------------------------------------------------------------
-    # Páginas 4-7: Totales por Producto / Canal
+    # Páginas: Totales por Producto / Canal / Territorio
     # ------------------------------------------------------------------
 
     def _draw_page_totales(self, c, group_by: str = "producto", mode: str = "semanal"):
-        subtitle = (f"{'Por Producto' if group_by == 'producto' else 'Por Canal'} — "
+        if group_by == "producto":
+            group_label = "Por Producto"
+        elif group_by == "canal":
+            group_label = "Por Canal"
+        else:
+            group_label = "Por Territorio"
+
+        subtitle = (f"{group_label} — "
                     f"{'Semanal' if mode == 'semanal' else 'Anual'}")
         self._draw_header(c, subtitulo=subtitle)
         self._draw_footer(c)
@@ -1389,14 +1402,37 @@ class LocoReportePDF:
         y = self._body_top()
         y = self._draw_section_title(
             c,
-            f"Ventas Totales {'Por Producto' if group_by == 'producto' else 'Por Canal'}",
+            f"Ventas Totales {group_label}",
             subtitle, y)
 
-        # Tabla de KPIs
+        # Tabla de KPIs (8 columnas)
         y = self._draw_kpi_table(c, y, group_by=group_by, mode=mode)
         y -= 8
 
-        # Gráfica Ventas $
+        if group_by == "territorio":
+            # Gráfica Regional para Territorio
+            proc = self.proc
+            yw, ww = proc.anio, proc.semana
+            df_curr = proc._filter_period(yw, ww) if mode == "semanal" else proc._filter_ytd(yw, ww)
+            reg_agg = (
+                df_curr[df_curr["region_o_estado"].notna() & (~df_curr["region_o_estado"].astype(str).str.strip().isin(["Nacional", "Sin Estado", "nan", ""]))]
+                .groupby("region_o_estado")["venta_sin_impuestos"]
+                .sum()
+                .reset_index()
+                .rename(columns={"venta_sin_impuestos": "ventas"})
+                .sort_values("ventas", ascending=False)
+            )
+            avail_h = y - FOOTER_HEIGHT_PT - self.MARGIN
+            if not reg_agg.empty and avail_h > 80:
+                chart_h = min(avail_h - 15, 175)
+                y = self._draw_chart_title_bar(
+                    c, f"Top Territorios por Ventas ($MXN sin IVA) — Total: {fmt_currency(reg_agg['ventas'].sum())}",
+                    y)
+                chart_png = make_bar_chart_regional(reg_agg, size_inches=(9.5, chart_h / 72.0))
+                self._embed_png(c, chart_png, self.MARGIN, y - chart_h, self.CONTENT_W, chart_h)
+            return
+
+        # Gráfica Ventas $ (para Producto y Canal)
         categories = PRODUCT_ORDER if group_by == "producto" else CANAL_ORDER
         color_map  = PRODUCT_COLORS if group_by == "producto" else CANAL_COLORS
         disp_names = PRODUCT_DISPLAY_NAMES if group_by == "producto" else {k: k for k in CANAL_ORDER}
@@ -1454,7 +1490,7 @@ class LocoReportePDF:
             self._embed_png(c, chart_png_b, self.MARGIN, y - chart_h2, self.CONTENT_W, chart_h2)
 
     def _draw_kpi_table(self, c, y: float, group_by: str = "producto", mode: str = "semanal") -> float:
-        """Tabla de KPIs por grupo (producto o canal) para la semana/año actual."""
+        """Tabla de KPIs por grupo (producto, canal o territorio) para la semana/año actual."""
         proc = self.proc
         yw, ww = proc.anio, proc.semana
         py, pw = proc.anio - 1, proc.semana
@@ -1466,12 +1502,41 @@ class LocoReportePDF:
             df_cur  = proc._filter_ytd(yw, ww)
             df_prev = proc._filter_ytd(py, pw)
 
-        group_col = "producto" if group_by == "producto" else "canal_norm"
+        has_plan = (group_by != "territorio")
+        plan_df = proc.dfp
+
+        if group_by == "producto":
+            group_col = "producto"
+            cats = PRODUCT_ORDER
+            disp = PRODUCT_DISPLAY_NAMES
+            all_top = cats
+        elif group_by == "canal":
+            group_col = "canal_norm"
+            cats = CANAL_ORDER
+            disp = {k: k for k in CANAL_ORDER}
+            all_top = cats
+        else:
+            group_col = "region_o_estado"
+            cur_valid = df_cur[df_cur[group_col].notna() & (~df_cur[group_col].astype(str).str.strip().isin(["Nacional", "Sin Estado", "nan", ""]))]
+            reg_totals = cur_valid.groupby(group_col)["venta_sin_impuestos"].sum().sort_values(ascending=False)
+            all_top = reg_totals.index.tolist()
+            if len(all_top) > 10:
+                cats = all_top[:10]
+            else:
+                cats = all_top
+            disp = {k: str(k) for k in cats}
+
         agg_cur  = df_cur.groupby(group_col)["venta_sin_impuestos"].sum()
         agg_prev = df_prev.groupby(group_col)["venta_sin_impuestos"].sum()
 
-        cats = PRODUCT_ORDER if group_by == "producto" else CANAL_ORDER
-        disp = PRODUCT_DISPLAY_NAMES if group_by == "producto" else {k: k for k in CANAL_ORDER}
+        if has_plan and not plan_df.empty:
+            if mode == "semanal":
+                p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] == ww)]
+            else:
+                p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] <= ww)]
+            p_agg = p_filter.groupby(group_col)["plan_venta_sin_impuestos"].sum()
+        else:
+            p_agg = pd.Series(dtype=float)
 
         # Diseño empresarial de tabla comparativa (8 columnas):
         #   VALORES REALES a la izquierda | CATEGORÍA al centro | VARIACIONES a la derecha
@@ -1482,57 +1547,88 @@ class LocoReportePDF:
         neg_cells = []
         CAT_COL = 3  # índice de la columna de categoría (centro)
 
-        plan_df = proc.dfp
-        p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] == ww)]
-        p_agg = p_filter.groupby(group_col)["plan_venta_sin_impuestos"].sum()
-
         total_cur = 0; total_prev = 0; total_plan = 0
         total_var_plan = 0; total_var_ant = 0
 
         for ri, cat in enumerate(cats):
             cv  = agg_cur.get(cat, 0)
             pv  = agg_prev.get(cat, 0)
-            plv = p_agg.get(cat, 0)
-            v_plan = cv - plv
+            plv = p_agg.get(cat, None) if has_plan else None
+            v_plan = (cv - plv) if (has_plan and plv is not None) else None
             v_ant  = cv - pv
-            p_plan = (v_plan / plv * 100) if plv > 0 else 0
+            p_plan = (v_plan / plv * 100) if (has_plan and plv is not None and plv > 0) else (0 if (has_plan and plv is not None) else None)
             p_ant  = (v_ant  / pv  * 100) if pv  > 0 else 0
 
-            total_cur  += cv; total_prev += pv; total_plan += plv
-            total_var_plan += v_plan; total_var_ant += v_ant
+            total_cur  += cv; total_prev += pv
+            if has_plan and plv is not None:
+                total_plan += plv
+                total_var_plan += v_plan
+            total_var_ant += v_ant
 
             row_idx = ri + 1
             # reales (izq) | categoría (centro) | variaciones (der)
-            r = [fmt_currency(pv), fmt_currency(plv), fmt_currency(cv),
-                 disp.get(cat, cat)[:22],
-                 fmt_currency(v_plan), fmt_pct(p_plan),
-                 fmt_currency(v_ant),  fmt_pct(p_ant)]
+            r = [fmt_currency(pv),
+                 fmt_currency(plv) if plv is not None else "N/A",
+                 fmt_currency(cv),
+                 disp.get(cat, str(cat))[:22],
+                 fmt_currency(v_plan) if v_plan is not None else "N/A",
+                 fmt_pct(p_plan) if p_plan is not None else "N/A",
+                 fmt_currency(v_ant),
+                 fmt_pct(p_ant)]
             rows.append(r)
 
-            if v_plan < 0:
+            if v_plan is not None and v_plan < 0:
                 neg_cells += [(row_idx, 4), (row_idx, 5)]
             if v_ant < 0:
                 neg_cells += [(row_idx, 6), (row_idx, 7)]
 
+        # Si es territorio y hay más de 10 territorios, agregar fila "Otros Territorios"
+        if group_by == "territorio" and len(all_top) > 10:
+            otros_territorios = all_top[10:]
+            cv_otros = sum(agg_cur.get(x, 0) for x in otros_territorios)
+            pv_otros = sum(agg_prev.get(x, 0) for x in otros_territorios)
+            v_ant_otros = cv_otros - pv_otros
+            p_ant_otros = (v_ant_otros / pv_otros * 100) if pv_otros > 0 else 0
+            total_cur += cv_otros
+            total_prev += pv_otros
+            total_var_ant += v_ant_otros
+            row_idx = len(rows)
+            rows.append([
+                fmt_currency(pv_otros), "N/A", fmt_currency(cv_otros),
+                "Otros Territorios",
+                "N/A", "N/A",
+                fmt_currency(v_ant_otros), fmt_pct(p_ant_otros)
+            ])
+            if v_ant_otros < 0:
+                neg_cells += [(row_idx, 6), (row_idx, 7)]
+
         # Fila total
-        tv_plan = total_var_plan
-        tp_plan = (tv_plan / total_plan * 100) if total_plan > 0 else 0
+        tot_row_idx = len(rows)
         tv_ant  = total_var_ant
         tp_ant  = (tv_ant  / total_prev * 100) if total_prev > 0 else 0
-        tot_row_idx = len(rows)
-        rows.append([fmt_currency(total_prev), fmt_currency(total_plan), fmt_currency(total_cur),
+        if has_plan:
+            tv_plan = total_var_plan
+            tp_plan = (tv_plan / total_plan * 100) if total_plan > 0 else 0
+            fmt_plan_tot = fmt_currency(total_plan)
+            fmt_vplan_tot = fmt_currency(tv_plan)
+            fmt_pplan_tot = fmt_pct(tp_plan)
+        else:
+            fmt_plan_tot = "N/A"
+            fmt_vplan_tot = "N/A"
+            fmt_pplan_tot = "N/A"
+
+        rows.append([fmt_currency(total_prev), fmt_plan_tot, fmt_currency(total_cur),
                      "Total",
-                     fmt_currency(tv_plan), fmt_pct(tp_plan),
+                     fmt_vplan_tot, fmt_pplan_tot,
                      fmt_currency(tv_ant),  fmt_pct(tp_ant)])
         hi_rows.append(tot_row_idx)
-        if tv_plan < 0: neg_cells += [(tot_row_idx, 4), (tot_row_idx, 5)]
+        if has_plan and total_var_plan < 0: neg_cells += [(tot_row_idx, 4), (tot_row_idx, 5)]
         if tv_ant  < 0: neg_cells += [(tot_row_idx, 6), (tot_row_idx, 7)]
 
         cw = self.CONTENT_W
         # reales(3) | categoría(centro) | variaciones(4)
         col_widths = [cw * 0.11, cw * 0.10, cw * 0.13, cw * 0.22,
                       cw * 0.12, cw * 0.09, cw * 0.12, cw * 0.11]
-        # Ajustar suma
         diff = cw - sum(col_widths)
         col_widths[-1] += diff
 

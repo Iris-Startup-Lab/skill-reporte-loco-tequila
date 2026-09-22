@@ -84,25 +84,32 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
     year_b_ok = proc._year_exists(py)
 
     plan_df = proc.dfp
-    if plan_df is not None and not plan_df.empty:
-        p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] == ww)]
-    else:
-        p_filter = None
+
+    territorios = sorted([
+        str(e) for e in proc.df["region_o_estado"].dropna().unique()
+        if str(e).strip() and str(e).strip() != "0" and str(e).strip().lower() != "nan"
+    ])
 
     groupings = [
-        ("producto", PRODUCT_ORDER, "producto", PRODUCT_DISPLAY_NAMES),
-        ("canal",    CANAL_ORDER,   "canal_norm", {k: k for k in CANAL_ORDER}),
+        ("producto",   PRODUCT_ORDER, "producto",        PRODUCT_DISPLAY_NAMES, True),
+        ("canal",      CANAL_ORDER,   "canal_norm",      {k: k for k in CANAL_ORDER}, True),
+        ("territorio", territorios,   "region_o_estado", {k: k for k in territorios}, False),
     ]
 
     result = {}
-    for key, cats, group_col, disp in groupings:
+    for key, cats, group_col, disp, has_plan in groupings:
         result[key] = {}
-        if p_filter is not None and not p_filter.empty:
-            p_agg = p_filter.groupby(group_col)["plan_venta_sin_impuestos"].sum()
-        else:
-            p_agg = pd.Series(dtype=float)
 
         for mode in ("semanal", "anual"):
+            if plan_df is not None and not plan_df.empty and has_plan:
+                if mode == "semanal":
+                    p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] == ww)]
+                else:
+                    p_filter = plan_df[(plan_df["anio_num"] == yw) & (plan_df["semana_num"] <= ww)]
+                p_agg = p_filter.groupby(group_col)["plan_venta_sin_impuestos"].sum()
+            else:
+                p_agg = pd.Series(dtype=float)
+
             if mode == "semanal":
                 df_cur  = proc._filter_period(yw, ww)
                 df_prev = proc._filter_period(py, pw)
@@ -124,11 +131,8 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
                 # "Otros" es, por diseño (design_tokens.PRODUCT_ORDER/CANAL_ORDER),
                 # el bucket dedicado a venta real sin Plan presupuestado
                 # asociado (Agave/Servicios/KIT's/etc. para producto; canales
-                # no catalogados para canal) — regla confirmada con el
-                # cliente: su columna Plan y variaciones vs Plan son "N/A",
-                # nunca un $0 inventado. Actual y Año Anterior sí son dinero
-                # real y se muestran normalmente.
-                es_comparable = (cat != "Otros")
+                # no catalogados para canal). Territorios tampoco tienen Plan presupuestado.
+                es_comparable = has_plan and (cat != "Otros")
 
                 if es_comparable:
                     plv = float(p_agg.get(cat, 0) or 0)
@@ -162,9 +166,20 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
                     "var_anio_pct":   (round(v_anio_pct, 1) if v_anio_pct is not None else None),
                 })
 
-            # Fila Total: el Plan del Total suma SOLO lo comparable (las
-            # categorías "N/A" no aportan nada, ya que no fue presupuestado).
-            tv_plan_pct = (total_var_plan / total_plan * 100) if total_plan > 0 else 0.0
+            if key == "territorio":
+                rows.sort(key=lambda x: x["actual"], reverse=True)
+
+            # Fila Total
+            if has_plan:
+                tv_plan_pct = (total_var_plan / total_plan * 100) if total_plan > 0 else 0.0
+                out_plan = round(total_plan, 2)
+                out_v_plan_abs = round(total_var_plan, 2)
+                out_v_plan_pct = round(tv_plan_pct, 1)
+            else:
+                out_plan = None
+                out_v_plan_abs = None
+                out_v_plan_pct = None
+
             if not year_b_ok:
                 tv_anio_pct = None
             else:
@@ -174,9 +189,9 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
                 "categoria":      "Total",
                 "actual":         round(total_cur, 2),
                 "anio_anterior":  round(total_prev, 2),
-                "plan":           round(total_plan, 2),
-                "var_plan_abs":   round(total_var_plan, 2),
-                "var_plan_pct":   round(tv_plan_pct, 1),
+                "plan":           out_plan,
+                "var_plan_abs":   out_v_plan_abs,
+                "var_plan_pct":   out_v_plan_pct,
                 "var_anio_abs":   round(total_var_anio, 2),
                 "var_anio_pct":   (round(tv_anio_pct, 1) if tv_anio_pct is not None else None),
             })
@@ -268,6 +283,8 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
                     continue
                 plan_detail.append({
                     "k": f"{int(r['anio_num'])}-W{int(r['semana_num']):02d}",
+                    "y": int(r["anio_num"]),
+                    "w": int(r["semana_num"]),
                     "p": PRODUCT_DISPLAY_NAMES.get(r["producto"], r["producto"]),
                     "c": r["canal_norm"],
                     "v": round(float(r["plan_venta_sin_impuestos"]), 2),
@@ -538,16 +555,11 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     /* ── Main layout ── */
     main {{ padding: 20px 32px; max-width: 1600px; margin: 0 auto; }}
 
-    /* ── KPI cards (Sticky) ── */
+    /* ── KPI cards (Flujo normal, no sticky) ── */
     .kpi-sticky-container {{
-      position: sticky;
-      top: var(--header-height, 86px);
-      z-index: 450;
-      background: var(--bg);
-      padding: 8px 0 14px 0;
-      margin-top: -8px;
-      margin-bottom: 20px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+      background: transparent;
+      padding: 4px 0 14px 0;
+      margin-bottom: 16px;
     }}
     .kpi-grid {{
       display: grid;
@@ -621,7 +633,52 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       color: var(--brand-maroon);
       transform: translateY(-1px);
     }}
-    .chart-actions {{ display: flex; gap: 6px; align-items: center; flex-shrink: 0; }}
+    .btn-chart-img.active {{
+      background: #ffffff;
+      color: var(--brand-maroon);
+    }}
+    .chart-actions {{ display: flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }}
+
+    /* ── Controles dinámicos de eje Y en gráficas ── */
+    .y-axis-control {{
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      border-radius: 4px;
+      padding: 2px 6px;
+    }}
+    .y-axis-control label {{
+      font-size: 0.65rem;
+      color: #fff;
+      font-weight: 600;
+      white-space: nowrap;
+    }}
+    .y-max-input {{
+      width: 62px;
+      padding: 1px 4px;
+      font-size: 0.68rem;
+      font-family: 'Poppins', sans-serif;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      background: #fff;
+      color: #333;
+    }}
+    .btn-reset-y {{
+      background: transparent;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      font-size: 0.74rem;
+      padding: 0 2px;
+      line-height: 1;
+      transition: transform 0.2s;
+    }}
+    .btn-reset-y:hover {{
+      transform: rotate(180deg);
+      color: var(--cream);
+    }}
 
     /* ── Modal de gráfica ampliada ── */
     .chart-modal-overlay {{
@@ -683,11 +740,19 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
     /* ── Tabs (Dashboard General / Comparativo 8 Columnas) ── */
     .tab-nav {{
+      position: sticky;
+      top: var(--header-height, 86px);
+      z-index: 490;
       display: flex;
-      gap: 4px;
+      flex-direction: column;
       padding: 0 32px;
       background: var(--card-bg);
       border-bottom: 2px solid var(--brand-maroon);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }}
+    .main-tabs-row {{
+      display: flex;
+      gap: 4px;
     }}
     .tab-btn {{
       background: transparent;
@@ -703,6 +768,52 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     }}
     .tab-btn:hover {{ color: var(--brand-maroon); }}
     .tab-btn.active {{ color: var(--brand-maroon); border-bottom-color: var(--brand-maroon); }}
+
+    /* ── Sub-pestañas / Navegación rápida a gráficas ── */
+    .subtabs-bar {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 6px 0 8px 0;
+      border-top: 1px solid #ECECEC;
+    }}
+    .subtabs-label {{
+      font-size: 0.66rem;
+      font-weight: 700;
+      color: var(--brand-maroon);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-right: 4px;
+      white-space: nowrap;
+    }}
+    .subtab-link {{
+      background: #F8F2F3;
+      color: var(--brand-maroon);
+      border: 1px solid rgba(110,30,40,0.2);
+      border-radius: 12px;
+      padding: 3px 10px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.68rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.18s;
+    }}
+    .subtab-link:hover {{
+      background: var(--brand-maroon);
+      color: #fff;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 6px rgba(110,30,40,0.25);
+    }}
+    .card-highlight {{
+      animation: pulseCard 1.6s ease-out;
+    }}
+    @keyframes pulseCard {{
+      0% {{ box-shadow: 0 0 0 3px var(--brand-maroon); transform: scale(1.008); }}
+      50% {{ box-shadow: 0 0 14px rgba(110,30,40,0.35); transform: scale(1.004); }}
+      100% {{ box-shadow: 0 2px 8px rgba(0,0,0,0.07); transform: scale(1); }}
+    }}
 
     /* ── Comparativo 8 Columnas (réplica de la tabla del PDF) ── */
     .comp8-cat {{ text-align: center; }}
@@ -776,8 +887,25 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     .opp-tipo.oportunidad {{ color: #00B050; }}
     .opp-tipo.informacion {{ color: #FFC000; }}
     .opp-hallazgo {{ font-size: 0.78rem; font-weight: 600; margin-bottom: 6px; }}
-    .opp-impacto {{ font-size: 0.7rem; color: var(--sub); margin-bottom: 4px; }}
     .opp-rec {{ font-size: 0.72rem; border-top: 1px solid #EEE; padding-top: 6px; margin-top: 4px; }}
+    .opp-fuente {{
+      font-size: 0.67rem;
+      color: var(--sub);
+      background: #F9F9FA;
+      border: 1px solid #ECECEC;
+      border-radius: 6px;
+      padding: 5px 8px;
+      margin-top: 8px;
+      line-height: 1.35;
+      word-break: break-word;
+    }}
+    .opp-fuente strong {{ color: var(--brand-maroon); font-weight: 600; }}
+    .opp-link {{
+      color: #1a73e8;
+      text-decoration: underline;
+      font-weight: 500;
+    }}
+    .opp-link:hover {{ color: #0d47a1; }}
 
     /* ── Footer ── */
     footer {{
@@ -875,8 +1003,26 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
   <div class="content-wrap">
   <nav class="tab-nav">
-    <button class="tab-btn active" data-tab="general" onclick="switchTab('general')">Dashboard General</button>
-    <button class="tab-btn" data-tab="comparativo8" onclick="switchTab('comparativo8')">Comparativo 8 Columnas</button>
+    <div class="main-tabs-row">
+      <button class="tab-btn active" data-tab="general" onclick="switchTab('general')">Dashboard General</button>
+      <button class="tab-btn" data-tab="comparativo8" onclick="switchTab('comparativo8')">Comparativo 8 Columnas</button>
+    </div>
+    <div class="subtabs-bar" id="subtabs-general" data-tab="general">
+      <span class="subtabs-label">Gráficas:</span>
+      <button class="subtab-link" onclick="jumpToSection('card-semanal', 'general')">📊 Semanales</button>
+      <button class="subtab-link" onclick="jumpToSection('card-producto', 'general')">📦 Por Producto</button>
+      <button class="subtab-link" onclick="jumpToSection('card-ranking', 'general')">🏆 Ranking</button>
+      <button class="subtab-link" onclick="jumpToSection('card-regional', 'general')">🗺️ Top Regiones</button>
+      <button class="subtab-link" onclick="jumpToSection('card-canal', 'general')">🏪 Por Canal</button>
+      <button class="subtab-link" onclick="jumpToSection('card-tabla', 'general')">📋 Detalle</button>
+      <button class="subtab-link" onclick="jumpToSection('card-opp', 'general')">💡 Oportunidades y Riesgos</button>
+    </div>
+    <div class="subtabs-bar" id="subtabs-comparativo8" data-tab="comparativo8" style="display: none;">
+      <span class="subtabs-label">Tablas:</span>
+      <button class="subtab-link" onclick="jumpToSection('card-comp8-producto', 'comparativo8')">📦 Por Producto</button>
+      <button class="subtab-link" onclick="jumpToSection('card-comp8-canal', 'comparativo8')">🏪 Por Canal</button>
+      <button class="subtab-link" onclick="jumpToSection('card-comp8-territorio', 'comparativo8')">🗺️ Por Territorio</button>
+    </div>
   </nav>
 
   <section class="tab-content" id="tab-general">
@@ -888,26 +1034,40 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
   <!-- Charts row 1 -->
   <div class="charts-grid">
-    <div class="chart-card">
+    <div class="chart-card" id="card-semanal">
       <div class="chart-title">
         <div>
           Ventas Netas Semanales ($MXN sin IVA)
           <span class="chart-note">Sin IVA ni IEPS · línea punteada = año anterior</span>
         </div>
         <div class="chart-actions">
+          <div class="y-axis-control" title="Límite máximo del eje Y">
+            <label for="yMax_semanal">Máx Y:</label>
+            <input type="number" id="yMax_semanal" class="y-max-input" placeholder="Auto" min="0" step="100000"
+                   onchange="setChartYMax('semanal', this.value)" onkeydown="if(event.key==='Enter') setChartYMax('semanal', this.value)">
+            <button class="btn-reset-y" onclick="resetChartYMax('semanal')" title="Restablecer límite automático">↺</button>
+          </div>
+          <button class="btn-chart-img" id="btnTogglePlan_semanal" onclick="togglePlanLine('semanal')">📉 Ocultar Plan</button>
           <button class="btn-chart-img" onclick="downloadChartImage('semanal', 'Ventas_Semanales_y_Plan')">📷 PNG</button>
           <button class="btn-chart-img" onclick="openChartModal('semanal')" title="Ver en grande">⛶ Ampliar</button>
         </div>
       </div>
       <div class="chart-body"><canvas id="chartSemanal" height="160"></canvas></div>
     </div>
-    <div class="chart-card">
+    <div class="chart-card" id="card-producto">
       <div class="chart-title">
         <div>
           Ventas por Producto por Semana
           <span class="chart-note">Barras apiladas sin IVA · líneas de plan y de año anterior</span>
         </div>
         <div class="chart-actions">
+          <div class="y-axis-control" title="Límite máximo del eje Y">
+            <label for="yMax_producto">Máx Y:</label>
+            <input type="number" id="yMax_producto" class="y-max-input" placeholder="Auto" min="0" step="100000"
+                   onchange="setChartYMax('producto', this.value)" onkeydown="if(event.key==='Enter') setChartYMax('producto', this.value)">
+            <button class="btn-reset-y" onclick="resetChartYMax('producto')" title="Restablecer límite automático">↺</button>
+          </div>
+          <button class="btn-chart-img" id="btnTogglePlan_producto" onclick="togglePlanLine('producto')">📉 Ocultar Plan</button>
           <button class="btn-chart-img" onclick="downloadChartImage('producto', 'Ventas_Por_Producto')">📷 PNG</button>
           <button class="btn-chart-img" onclick="openChartModal('producto')" title="Ver en grande">⛶ Ampliar</button>
         </div>
@@ -918,20 +1078,32 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
   <!-- Charts row 2 -->
   <div class="charts-grid">
-    <div class="chart-card">
+    <div class="chart-card" id="card-ranking">
       <div class="chart-title">
         <div>Ranking de Productos</div>
         <div class="chart-actions">
+          <div class="y-axis-control" title="Límite máximo de ventas">
+            <label for="yMax_ranking">Máx:</label>
+            <input type="number" id="yMax_ranking" class="y-max-input" placeholder="Auto" min="0" step="100000"
+                   onchange="setChartYMax('ranking', this.value)" onkeydown="if(event.key==='Enter') setChartYMax('ranking', this.value)">
+            <button class="btn-reset-y" onclick="resetChartYMax('ranking')" title="Restablecer límite automático">↺</button>
+          </div>
           <button class="btn-chart-img" onclick="downloadChartImage('ranking', 'Ranking_Productos')">📷 PNG</button>
           <button class="btn-chart-img" onclick="openChartModal('ranking')" title="Ver en grande">⛶ Ampliar</button>
         </div>
       </div>
       <div class="chart-body"><canvas id="chartRanking" height="130"></canvas></div>
     </div>
-    <div class="chart-card">
+    <div class="chart-card" id="card-regional">
       <div class="chart-title">
         <div>Top Regiones / Estados por Ventas</div>
         <div class="chart-actions">
+          <div class="y-axis-control" title="Límite máximo de ventas">
+            <label for="yMax_regional">Máx:</label>
+            <input type="number" id="yMax_regional" class="y-max-input" placeholder="Auto" min="0" step="100000"
+                   onchange="setChartYMax('regional', this.value)" onkeydown="if(event.key==='Enter') setChartYMax('regional', this.value)">
+            <button class="btn-reset-y" onclick="resetChartYMax('regional')" title="Restablecer límite automático">↺</button>
+          </div>
           <button class="btn-chart-img" onclick="downloadChartImage('regional', 'Top_Regiones_Ventas')">📷 PNG</button>
           <button class="btn-chart-img" onclick="openChartModal('regional')" title="Ver en grande">⛶ Ampliar</button>
         </div>
@@ -942,13 +1114,19 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
 
   <!-- Charts row 3: Canal -->
   <div class="charts-grid one-col">
-    <div class="chart-card">
+    <div class="chart-card" id="card-canal">
       <div class="chart-title">
         <div>
           Ventas por Canal por Semana
           <span class="chart-note">Sin IVA · total en miles arriba de cada barra</span>
         </div>
         <div class="chart-actions">
+          <div class="y-axis-control" id="yMaxControl_canal" title="Límite máximo del eje Y">
+            <label for="yMax_canal">Máx Y:</label>
+            <input type="number" id="yMax_canal" class="y-max-input" placeholder="Auto" min="0" step="100000"
+                   onchange="setChartYMax('canal', this.value)" onkeydown="if(event.key==='Enter') setChartYMax('canal', this.value)">
+            <button class="btn-reset-y" onclick="resetChartYMax('canal')" title="Restablecer límite automático">↺</button>
+          </div>
           <div class="seg-control" id="canalViewToggle">
             <button class="seg-btn active" data-mode="values" onclick="setCanalViewMode('values')">Valores ($)</button>
             <button class="seg-btn" data-mode="percent" onclick="setCanalViewMode('percent')">% (100% apilado)</button>
@@ -962,7 +1140,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
   </div>
 
   <!-- Tabla filtrable -->
-  <div class="table-card">
+  <div class="table-card" id="card-tabla">
     <div class="table-header">
       <span>Detalle de Ventas Filtradas</span>
       <span id="tableCount" style="font-size:0.72rem;opacity:0.8;"></span>
@@ -992,7 +1170,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
   </div>
 
   <!-- Oportunidades y Riesgos -->
-  <div class="chart-card" style="margin-bottom:22px;">
+  <div class="chart-card" id="card-opp" style="margin-bottom:22px;">
     <div class="chart-title">Oportunidades y Riesgos Identificados</div>
     <div class="chart-body">
       <div class="opp-grid" id="oppGrid"></div>
@@ -1022,7 +1200,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     </div>
   </div>
 
-  <div class="table-card">
+  <div class="table-card" id="card-comp8-producto">
     <div class="table-header"><span>Por Producto</span></div>
     <div class="table-wrapper" style="max-height:none;">
       <table class="comp8-table">
@@ -1043,7 +1221,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     </div>
   </div>
 
-  <div class="table-card">
+  <div class="table-card" id="card-comp8-canal">
     <div class="table-header"><span>Por Canal</span></div>
     <div class="table-wrapper" style="max-height:none;">
       <table class="comp8-table">
@@ -1060,6 +1238,27 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
           </tr>
         </thead>
         <tbody id="comp8TableCanal"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="table-card" id="card-comp8-territorio">
+    <div class="table-header"><span>Por Territorio</span></div>
+    <div class="table-wrapper" style="max-height: 480px; overflow-y: auto;">
+      <table class="comp8-table">
+        <thead>
+          <tr>
+            <th>Año Ant.</th>
+            <th>Plan</th>
+            <th class="comp8-actual">Actual</th>
+            <th class="comp8-cat">Territorio</th>
+            <th>Var Plan $</th>
+            <th>Var Plan %</th>
+            <th>Var Año $</th>
+            <th>Var Año %</th>
+          </tr>
+        </thead>
+        <tbody id="comp8TableTerritorio"></tbody>
       </table>
     </div>
   </div>
@@ -1133,6 +1332,108 @@ let modalChartKey = null;
 // (cada canal como % del total de esa semana). Controlado por el toggle de
 // la tarjeta "Ventas por Canal por Semana" (setCanalViewMode).
 let canalViewMode = 'values';
+
+// ── Estado de visibilidad de líneas de Plan ─────────────────────────────
+let planVisible = {{
+  semanal: true,
+  producto: true,
+}};
+
+// ── Límites máximos personalizados del eje (Y o X) ──────────────────────
+let chartYMaxMap = {{
+  semanal: null,
+  producto: null,
+  ranking: null,
+  regional: null,
+  canal: null,
+}};
+
+// ── Alternar visibilidad de la línea de Plan ─────────────────────────────
+function togglePlanLine(key) {{
+  planVisible[key] = !planVisible[key];
+  const btn = document.getElementById(`btnTogglePlan_${{key}}`);
+  if (btn) {{
+    btn.textContent = planVisible[key] ? '📉 Ocultar Plan' : '📈 Mostrar Plan';
+    btn.classList.toggle('active', !planVisible[key]);
+  }}
+  const chartInstance = charts[key];
+  if (chartInstance) {{
+    const dsIndex = chartInstance.data.datasets.findIndex(d => d.stack === 'plan' || (d.label && d.label.includes('Plan')));
+    if (dsIndex !== -1) {{
+      chartInstance.setDatasetVisibility(dsIndex, planVisible[key]);
+      chartInstance.update();
+    }}
+  }}
+  if (modalChart && modalChartKey === key) {{
+    const dsIndex = modalChart.data.datasets.findIndex(d => d.stack === 'plan' || (d.label && d.label.includes('Plan')));
+    if (dsIndex !== -1) {{
+      modalChart.setDatasetVisibility(dsIndex, planVisible[key]);
+      modalChart.update();
+    }}
+  }}
+}}
+
+// ── Control dinámico de escala / límite de eje (Y o X) ───────────────────
+function setChartYMax(key, val) {{
+  const num = (val !== '' && !isNaN(val) && Number(val) > 0) ? Number(val) : null;
+  chartYMaxMap[key] = num;
+  applyYMaxToChart(key);
+}}
+
+function resetChartYMax(key) {{
+  chartYMaxMap[key] = null;
+  const input = document.getElementById(`yMax_${{key}}`);
+  if (input) input.value = '';
+  applyYMaxToChart(key);
+}}
+
+function applyYMaxToChart(key) {{
+  const targetVal = chartYMaxMap[key];
+  const chartInstance = charts[key];
+  if (!chartInstance) return;
+
+  const isHorizontal = (key === 'ranking' || key === 'regional');
+  const axisName = isHorizontal ? 'x' : 'y';
+
+  if (!chartInstance.options.scales) chartInstance.options.scales = {{}};
+  if (!chartInstance.options.scales[axisName]) chartInstance.options.scales[axisName] = {{}};
+
+  chartInstance.options.scales[axisName].max = (targetVal !== null) ? targetVal : undefined;
+  chartInstance.update();
+
+  if (modalChart && modalChartKey === key) {{
+    if (!modalChart.options.scales) modalChart.options.scales = {{}};
+    if (!modalChart.options.scales[axisName]) modalChart.options.scales[axisName] = {{}};
+    modalChart.options.scales[axisName].max = (targetVal !== null) ? targetVal : undefined;
+    modalChart.update();
+  }}
+}}
+
+// ── Navegación rápida / Scroll a sección de gráfico o tabla ───────────────
+function jumpToSection(cardId, tabName) {{
+  if (tabName) {{
+    switchTab(tabName);
+  }}
+  const el = document.getElementById(cardId);
+  if (!el) return;
+
+  const headerHeight = document.querySelector('header') ? document.querySelector('header').offsetHeight : 80;
+  const tabNavHeight = document.querySelector('.tab-nav') ? document.querySelector('.tab-nav').offsetHeight : 80;
+  const totalOffset = headerHeight + tabNavHeight + 14;
+
+  const elementPosition = el.getBoundingClientRect().top;
+  const offsetPosition = elementPosition + window.pageYOffset - totalOffset;
+
+  window.scrollTo({{
+    top: Math.max(0, offsetPosition),
+    behavior: 'smooth'
+  }});
+
+  el.classList.remove('card-highlight');
+  void el.offsetWidth;
+  el.classList.add('card-highlight');
+  setTimeout(() => el.classList.remove('card-highlight'), 1800);
+}}
 
 // ── Plugin inline de Chart.js: datalabel del TOTAL apilado ────────────────
 // Dibuja un texto arriba de cada barra apilada con el total de esa barra
@@ -1231,13 +1532,12 @@ function switchTab(name) {{
   document.querySelectorAll('.tab-btn').forEach(b => {{
     b.classList.toggle('active', b.dataset.tab === name);
   }});
+  document.querySelectorAll('.subtabs-bar').forEach(bar => {{
+    bar.style.display = (bar.dataset.tab === name) ? 'flex' : 'none';
+  }});
 }}
 
-// ── Comparativo 8 Columnas: Semanal / Anual (YTD) ─────────────────────────
-// DATA.comparativo_8col ya viene calculado en Python (dashboard_generator.
-// _build_comparativo_8col), con la misma fuente de verdad que el PDF
-// (proc._filter_period/_filter_ytd + proc.dfp) — no depende de los filtros
-// del panel lateral ni se recalcula aquí, solo se renderiza.
+// ── Comparativo 8 Columnas: Semanal / Anual (YTD) Dinámico y Filtrable ───────
 let comparativo8Mode = 'semanal';
 
 function setComparativo8Mode(mode) {{
@@ -1248,20 +1548,197 @@ function setComparativo8Mode(mode) {{
   renderComparativo8Col();
 }}
 
+function computeComparativo8(groupKey) {{
+  const anioVal    = document.getElementById('fAnio') ? document.getElementById('fAnio').value : 'all';
+  const semanaVal  = document.getElementById('fSemana') ? document.getElementById('fSemana').value : 'all';
+  const prodVal    = document.getElementById('fProducto') ? document.getElementById('fProducto').value : 'all';
+  const canalVal   = document.getElementById('fCanal') ? document.getElementById('fCanal').value : 'all';
+  const estadoVal  = document.getElementById('fEstado') ? document.getElementById('fEstado').value : 'all';
+  const clienteVal = document.getElementById('fCliente') ? document.getElementById('fCliente').value : 'all';
+  const compVal    = document.getElementById('fComparablePlan') ? document.getElementById('fComparablePlan').value : 'comparables';
+
+  const targetYear = (anioVal !== 'all') ? Number(anioVal) : DATA.meta.anio;
+  const prevYear   = targetYear - 1;
+  const targetWeek = (semanaVal !== 'all') ? Number(semanaVal.replace('W','')) : DATA.meta.semana;
+
+  const yearBOk = DATA.tabla.some(r => r.anio === prevYear);
+
+  // Filtros de periodo
+  const isCurrentPeriod = (r) => {{
+    if (r.anio !== targetYear) return false;
+    return (comparativo8Mode === 'semanal') ? (r.semana_num === targetWeek) : (r.semana_num <= targetWeek);
+  }};
+  const isPrevPeriod = (r) => {{
+    if (r.anio !== prevYear) return false;
+    return (comparativo8Mode === 'semanal') ? (r.semana_num === targetWeek) : (r.semana_num <= targetWeek);
+  }};
+
+  // Filtros cruzados (aplica los filtros laterales excepto la dimensión que se está agrupando)
+  const matchesCrossFilters = (r, ignoreKey) => {{
+    if (ignoreKey !== 'producto' && prodVal !== 'all' && r.producto_display !== prodVal) return false;
+    if (ignoreKey !== 'canal' && canalVal !== 'all' && r.canal !== canalVal) return false;
+    if (ignoreKey !== 'territorio' && estadoVal !== 'all' && r.estado !== estadoVal) return false;
+    if (clienteVal !== 'all' && r.cliente !== clienteVal) return false;
+    if (compVal === 'comparables' && !r.comparable_plan) return false;
+    if (compVal === 'no_comparables' && r.comparable_plan) return false;
+    return true;
+  }};
+
+  // Determinar categorías a mostrar
+  let categories = [];
+  if (groupKey === 'producto') {{
+    if (prodVal !== 'all') {{
+      categories = [prodVal];
+    }} else {{
+      categories = [...DATA.filtros.productos];
+      const hasOtros = DATA.tabla.some(r => (isCurrentPeriod(r) || isPrevPeriod(r)) && matchesCrossFilters(r, 'producto') && r.producto_display === 'Otros');
+      if (hasOtros && !categories.includes('Otros')) {{
+        categories.push('Otros');
+      }}
+    }}
+  }} else if (groupKey === 'canal') {{
+    if (canalVal !== 'all') {{
+      categories = [canalVal];
+    }} else {{
+      categories = [...DATA.filtros.canales];
+    }}
+  }} else if (groupKey === 'territorio') {{
+    if (estadoVal !== 'all') {{
+      categories = [estadoVal];
+    }} else {{
+      const terSet = new Set();
+      DATA.tabla.forEach(r => {{
+        if (r.estado && r.estado !== '0' && r.estado.toLowerCase() !== 'nan') {{
+          terSet.add(r.estado);
+        }}
+      }});
+      categories = Array.from(terSet);
+    }}
+  }}
+
+  // Pre-agregación de ventas actual y anterior
+  const aggCur = {{}};
+  const aggPrev = {{}};
+  DATA.tabla.forEach(r => {{
+    if (!matchesCrossFilters(r, groupKey)) return;
+    const cat = (groupKey === 'producto') ? r.producto_display : ((groupKey === 'canal') ? r.canal : r.estado);
+    if (!cat) return;
+    if (isCurrentPeriod(r)) {{
+      aggCur[cat] = (aggCur[cat] || 0) + (r.venta_sin_iva || 0);
+    }} else if (isPrevPeriod(r)) {{
+      aggPrev[cat] = (aggPrev[cat] || 0) + (r.venta_sin_iva || 0);
+    }}
+  }});
+
+  // Pre-agregación de Plan
+  const planAgg = {{}};
+  const hasPlanDetails = Array.isArray(DATA.plan_detail) && DATA.plan_detail.length > 0;
+  const planApplies = (estadoVal === 'all' && clienteVal === 'all' && compVal !== 'no_comparables');
+
+  if (planApplies && hasPlanDetails) {{
+    DATA.plan_detail.forEach(p => {{
+      const pYear = p.y || Number((p.k || '').split('-W')[0]);
+      const pWeek = p.w || Number((p.k || '').split('-W')[1]);
+      if (pYear !== targetYear) return;
+      const inWeek = (comparativo8Mode === 'semanal') ? (pWeek === targetWeek) : (pWeek <= targetWeek);
+      if (!inWeek) return;
+
+      if (groupKey === 'producto') {{
+        if (canalVal !== 'all' && p.c !== canalVal) return;
+        planAgg[p.p] = (planAgg[p.p] || 0) + (p.v || 0);
+      }} else if (groupKey === 'canal') {{
+        if (prodVal !== 'all' && p.p !== prodVal) return;
+        planAgg[p.c] = (planAgg[p.c] || 0) + (p.v || 0);
+      }}
+    }});
+  }}
+
+  const rows = [];
+  let totalCur = 0;
+  let totalPrev = 0;
+  let totalPlan = 0;
+  let hasAnyPlan = false;
+
+  categories.forEach(cat => {{
+    const cv = aggCur[cat] || 0;
+    const pv = aggPrev[cat] || 0;
+
+    let plv = null;
+    let vPlanAbs = null;
+    let vPlanPct = null;
+
+    if (groupKey !== 'territorio' && cat !== 'Otros' && planApplies && hasPlanDetails) {{
+      plv = planAgg[cat] || 0;
+      vPlanAbs = cv - plv;
+      vPlanPct = (plv > 0) ? (vPlanAbs / plv * 100) : 0;
+      totalPlan += plv;
+      hasAnyPlan = true;
+    }}
+
+    const vAnioAbs = cv - pv;
+    const vAnioPct = (!yearBOk) ? null : ((pv !== 0) ? (vAnioAbs / pv * 100) : (cv > 0 ? 100 : 0));
+
+    totalCur += cv;
+    totalPrev += pv;
+
+    rows.push({{
+      categoria: cat,
+      actual: cv,
+      anio_anterior: pv,
+      plan: plv,
+      var_plan_abs: vPlanAbs,
+      var_plan_pct: vPlanPct,
+      var_anio_abs: vAnioAbs,
+      var_anio_pct: vAnioPct,
+    }});
+  }});
+
+  // Para territorio: ordenar por venta actual descendente para presentación ejecutiva
+  if (groupKey === 'territorio') {{
+    rows.sort((a, b) => b.actual - a.actual);
+  }}
+
+  // Fila Total
+  let totalVarPlanAbs = null;
+  let totalVarPlanPct = null;
+  let finalTotalPlan = null;
+
+  if (hasAnyPlan) {{
+    finalTotalPlan = totalPlan;
+    totalVarPlanAbs = totalCur - totalPlan;
+    totalVarPlanPct = (totalPlan > 0) ? (totalVarPlanAbs / totalPlan * 100) : 0;
+  }}
+
+  const totalVarAnioAbs = totalCur - totalPrev;
+  const totalVarAnioPct = (!yearBOk) ? null : ((totalPrev !== 0) ? (totalVarAnioAbs / totalPrev * 100) : (totalCur > 0 ? 100 : 0));
+
+  rows.push({{
+    categoria: 'Total',
+    actual: totalCur,
+    anio_anterior: totalPrev,
+    plan: finalTotalPlan,
+    var_plan_abs: totalVarPlanAbs,
+    var_plan_pct: totalVarPlanPct,
+    var_anio_abs: totalVarAnioAbs,
+    var_anio_pct: totalVarAnioPct,
+  }});
+
+  return rows;
+}}
+
 function renderComparativo8Col() {{
   renderComparativo8Table('producto', 'comp8TableProducto');
   renderComparativo8Table('canal', 'comp8TableCanal');
+  renderComparativo8Table('territorio', 'comp8TableTerritorio');
 }}
 
 function renderComparativo8Table(groupKey, tbodyId) {{
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
-  const data = DATA.comparativo_8col || {{}};
-  const rows = (data[groupKey] && data[groupKey][comparativo8Mode]) || [];
+  const rows = computeComparativo8(groupKey);
 
-  // "N/A" = Plan no aplica (categoría "Otros" = venta real sin presupuesto
-  // asociado: Agave/Servicios/KIT's/etc., o canal no catalogado). "N/D" =
-  // variación sin base histórica real (año anterior no existe en los datos).
+  // "N/A" = Plan no aplica (categoría "Otros", Territorio o filtros no comparables).
+  // "N/D" = variación sin base histórica real (año anterior no existe en los datos).
   const fmtOrNA = (v) => (v === null || v === undefined) ? 'N/A' : fmtCur(v);
   const fmtPctOrNA = (v) => (v === null || v === undefined) ? 'N/A' : `${{v >= 0 ? '+' : ''}}${{v.toFixed(1)}}%`;
   const fmtPctOrND = (v) => (v === null || v === undefined) ? 'N/D' : `${{v >= 0 ? '+' : ''}}${{v.toFixed(1)}}%`;
@@ -1400,6 +1877,9 @@ function updateDashboard() {{
 
   // 3. Renderizar Tabla
   renderTable(filteredTabla);
+
+  // 4. Renderizar Comparativo 8 Columnas dinámico
+  renderComparativo8Col();
 }}
 
 // ── Recálculo Dinámico de KPIs ────────────────────────────────────────────
@@ -1662,25 +2142,31 @@ function renderChartsDynamic(records) {{
   const showPlanLine  = compFilterVal !== 'no_comparables';
 
   // 1. Ventas Semanales + Plan + Año Anterior (línea gris)
-  chartFactories.semanal = () => ({{
-    type: 'bar',
-    data: {{
-      labels: sortedWeeks.slice(),
-      datasets: [
-        {{
-          label: 'Ventas Netas $',
-          data: totalesSem,
-          backgroundColor: '{BRAND_MAROON}CC',
-          borderColor: '{BRAND_MAROON}',
-          borderWidth: 1,
-          order: 2,
-        }},
-        ...(showPlanLine ? [planDataset(planSem)] : []),
-        ...(hasLY ? [lastYearDataset(lySem)] : []),
-      ]
-    }},
-    options: chartOptions('$MXN miles (sin IVA)', true),
-  }});
+  const semanalPlanDs = planDataset(planSem);
+  if (!planVisible.semanal) semanalPlanDs.hidden = true;
+  chartFactories.semanal = () => {{
+    const opts = chartOptions('$MXN miles (sin IVA)', true);
+    if (chartYMaxMap.semanal !== null) opts.scales.y.max = chartYMaxMap.semanal;
+    return {{
+      type: 'bar',
+      data: {{
+        labels: sortedWeeks.slice(),
+        datasets: [
+          {{
+            label: 'Ventas Netas $',
+            data: totalesSem,
+            backgroundColor: '{BRAND_MAROON}CC',
+            borderColor: '{BRAND_MAROON}',
+            borderWidth: 1,
+            order: 2,
+          }},
+          ...(showPlanLine ? [semanalPlanDs] : []),
+          ...(hasLY ? [lastYearDataset(lySem)] : []),
+        ]
+      }},
+      options: opts,
+    }};
+  }};
 
   // 2. Ventas por Producto por Semana + Plan + Año Anterior (línea gris)
   const prodNames = DATA.filtros.productos;
@@ -1688,24 +2174,30 @@ function renderChartsDynamic(records) {{
     name: pName,
     data: sortedWeeks.map(w => weekMap[w].prods[pName] || 0),
   }}));
-  chartFactories.producto = () => ({{
-    type: 'bar',
-    data: {{
-      labels: sortedWeeks.slice(),
-      datasets: [
-        ...prodSeries.map(s => ({{
-          label: s.name,
-          data: s.data,
-          backgroundColor: DATA.product_colors[s.name] || '#999',
-          stack: 'prod',
-          order: 2,
-        }})),
-        ...(showPlanLine ? [planDataset(planSem)] : []),
-        ...(hasLY ? [lastYearDataset(lySem)] : []),
-      ]
-    }},
-    options: chartOptions('$MXN miles (sin IVA)', false),
-  }});
+  const productoPlanDs = planDataset(planSem);
+  if (!planVisible.producto) productoPlanDs.hidden = true;
+  chartFactories.producto = () => {{
+    const opts = chartOptions('$MXN miles (sin IVA)', false);
+    if (chartYMaxMap.producto !== null) opts.scales.y.max = chartYMaxMap.producto;
+    return {{
+      type: 'bar',
+      data: {{
+        labels: sortedWeeks.slice(),
+        datasets: [
+          ...prodSeries.map(s => ({{
+            label: s.name,
+            data: s.data,
+            backgroundColor: DATA.product_colors[s.name] || '#999',
+            stack: 'prod',
+            order: 2,
+          }})),
+          ...(showPlanLine ? [productoPlanDs] : []),
+          ...(hasLY ? [lastYearDataset(lySem)] : []),
+        ]
+      }},
+      options: opts,
+    }};
+  }};
 
   // 3. Ranking de Productos
   // `producto_display` ya viene limpio desde Python (data_processor.py fuerza
@@ -1723,18 +2215,8 @@ function renderChartsDynamic(records) {{
     prodTotals[p] = (prodTotals[p] || 0) + (r.venta_sin_iva || 0);
   }});
   const sortedProds = Object.entries(prodTotals).sort((a,b) => b[1] - a[1]);
-  chartFactories.ranking = () => ({{
-    type: 'bar',
-    data: {{
-      labels: sortedProds.map(p => p[0]),
-      datasets: [{{
-        label: 'Ventas Total',
-        data: sortedProds.map(p => p[1]),
-        backgroundColor: sortedProds.map(p => DATA.product_colors[p[0]] || '#999'),
-        borderRadius: 4,
-      }}]
-    }},
-    options: {{
+  chartFactories.ranking = () => {{
+    const opts = {{
       indexAxis: 'y',
       responsive: true,
       plugins: {{
@@ -1745,11 +2227,25 @@ function renderChartsDynamic(records) {{
         x: {{
           ticks: {{ callback: v => fmtMillions(v), font: {{size: 10}} }},
           grid: {{ color: '{CHART_GRID}' }},
+          max: (chartYMaxMap.ranking !== null) ? chartYMaxMap.ranking : undefined,
         }},
         y: {{ ticks: {{ font: {{size: 10}} }} }},
       }}
-    }}
-  }});
+    }};
+    return {{
+      type: 'bar',
+      data: {{
+        labels: sortedProds.map(p => p[0]),
+        datasets: [{{
+          label: 'Ventas Total',
+          data: sortedProds.map(p => p[1]),
+          backgroundColor: sortedProds.map(p => DATA.product_colors[p[0]] || '#999'),
+          borderRadius: 4,
+        }}]
+      }},
+      options: opts,
+    }};
+  }};
 
   // 4. Top Regiones / Estados
   // "Nacional" (venta sin desglose de estado real) y "Sin Estado" (vacío en
@@ -1762,18 +2258,8 @@ function renderChartsDynamic(records) {{
     stateTotals[s] = (stateTotals[s] || 0) + (r.venta_sin_iva || 0);
   }});
   const sortedStates = Object.entries(stateTotals).sort((a,b) => b[1] - a[1]).slice(0, 12);
-  chartFactories.regional = () => ({{
-    type: 'bar',
-    data: {{
-      labels: sortedStates.map(s => s[0]),
-      datasets: [{{
-        label: 'Ventas Total',
-        data: sortedStates.map(s => s[1]),
-        backgroundColor: '{BRAND_MAROON}BB',
-        borderRadius: 3,
-      }}]
-    }},
-    options: {{
+  chartFactories.regional = () => {{
+    const opts = {{
       indexAxis: 'y',
       responsive: true,
       plugins: {{
@@ -1784,11 +2270,25 @@ function renderChartsDynamic(records) {{
         x: {{
           ticks: {{ callback: v => fmtMillions(v), font: {{size: 10}} }},
           grid: {{ color: '{CHART_GRID}' }},
+          max: (chartYMaxMap.regional !== null) ? chartYMaxMap.regional : undefined,
         }},
         y: {{ ticks: {{ font: {{size: 9}} }} }},
       }}
-    }}
-  }});
+    }};
+    return {{
+      type: 'bar',
+      data: {{
+        labels: sortedStates.map(s => s[0]),
+        datasets: [{{
+          label: 'Ventas Total',
+          data: sortedStates.map(s => s[1]),
+          backgroundColor: '{BRAND_MAROON}BB',
+          borderRadius: 3,
+        }}]
+      }},
+      options: opts,
+    }};
+  }};
 
   // 5. Ventas por Canal por Semana
   // Toggle "Valores ($)" / "% (100% apilado)" (canalViewMode, ver
@@ -1827,6 +2327,8 @@ function renderChartsDynamic(records) {{
       opts.scales.y.max = 100;
       opts.scales.y.ticks.callback = v => `${{v}}%`;
       opts.plugins.tooltip.callbacks.label = ctx => ` ${{ctx.dataset.label}}: ${{ctx.raw.toFixed(1)}}%`;
+    }} else if (chartYMaxMap.canal !== null) {{
+      opts.scales.y.max = chartYMaxMap.canal;
     }}
     return {{
       type: 'bar',
@@ -1842,6 +2344,26 @@ function renderChartsDynamic(records) {{
       options: opts,
     }};
   }};
+
+  // Sincronizar botones de Plan
+  const btnSemanal = document.getElementById('btnTogglePlan_semanal');
+  if (btnSemanal) {{
+    btnSemanal.textContent = planVisible.semanal ? '📉 Ocultar Plan' : '📈 Mostrar Plan';
+    btnSemanal.classList.toggle('active', !planVisible.semanal);
+  }}
+  const btnProducto = document.getElementById('btnTogglePlan_producto');
+  if (btnProducto) {{
+    btnProducto.textContent = planVisible.producto ? '📉 Ocultar Plan' : '📈 Mostrar Plan';
+    btnProducto.classList.toggle('active', !planVisible.producto);
+  }}
+
+  // Sincronizar inputs de límite de eje
+  ['semanal', 'producto', 'ranking', 'regional', 'canal'].forEach(k => {{
+    const input = document.getElementById(`yMax_${{k}}`);
+    if (input && chartYMaxMap[k] !== null) {{
+      input.value = chartYMaxMap[k];
+    }}
+  }});
 
   // Instanciar (o reinstanciar) las gráficas de las tarjetas
   Object.keys(CHART_CANVAS).forEach(key => {{
@@ -1933,6 +2455,12 @@ function nextPage() {{
 }}
 
 // ── Oportunidades y Riesgos ───────────────────────────────────────────────
+function formatFuenteLink(fuente) {{
+  if (!fuente) return '';
+  const urlRegex = /(https?:[/][/][^\\s\\)\\],]+)/g;
+  return String(fuente).replace(urlRegex, url => `<a href="${{url}}" target="_blank" rel="noopener noreferrer" class="opp-link">${{url}}</a>`);
+}}
+
 function renderOportunidades(items) {{
   const grid = document.getElementById('oppGrid');
   if (!items || items.length === 0) {{
@@ -1941,12 +2469,19 @@ function renderOportunidades(items) {{
   }}
   grid.innerHTML = items.map(item => {{
     const cls = item.tipo.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
+    const fuenteStr = item.fuente || '';
+    const fuenteHtml = fuenteStr ? `
+      <div class="opp-fuente">
+        <strong>🔗 Fuente verificable:</strong> ${{formatFuenteLink(fuenteStr)}}
+      </div>
+    ` : '';
     return `
       <div class="opp-card ${{cls}}">
         <div class="opp-tipo ${{cls}}">${{item.tipo}}</div>
         <div class="opp-hallazgo">${{item.hallazgo}}</div>
         <div class="opp-impacto">📊 Impacto: ${{item.impacto}}</div>
         <div class="opp-rec">💡 ${{item.recomendacion}}</div>
+        ${{fuenteHtml}}
       </div>
     `;
   }}).join('');

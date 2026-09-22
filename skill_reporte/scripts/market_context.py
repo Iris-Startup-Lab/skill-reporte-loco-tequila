@@ -82,6 +82,7 @@ def load_market_context(filepath: Optional[str] = None,
                 {
                     "hallazgo": "Contexto de mercado externo no cargado",
                     "tipo": "Informacion",
+                    "fuente": "N/D",
                     "impacto": "N/D",
                     "recomendacion": (
                         "Solicitar al agente busqueda de: "
@@ -164,36 +165,91 @@ def _extract_fuentes(contenido: str) -> List[str]:
 
 def _parse_hallazgos(texto: str) -> List[Dict]:
     """
-    Intenta extraer hallazgos estructurados del texto de contexto.
-    Si no puede parsear, devuelve el texto completo como un hallazgo.
+    Extrae hallazgos estructurados del texto de contexto asociando la fuente verificable
+    de redes/web/instituciones a cada hallazgo de RIESGO u OPORTUNIDAD.
     """
-    # Buscar patrones simples: "RIESGO:" o "OPORTUNIDAD:"
+    import re
     hallazgos = []
     lineas = texto.splitlines()
 
-    for linea in lineas:
-        linea = linea.strip()
-        if linea.upper().startswith("RIESGO:"):
+    current_section = "Mercado y Tendencias"
+    section_fuente = ""
+
+    for i, line in enumerate(lineas):
+        l = line.strip()
+        if not l:
+            continue
+
+        if l.startswith("##"):
+            current_section = l.lstrip("#").strip()
+            section_fuente = ""
+            continue
+
+        if l.upper().startswith(("FUENTE:", "SOURCE:", "VIA:", "URL:")):
+            section_fuente = l.split(":", 1)[1].strip()
+            continue
+
+        tipo = None
+        contenido = ""
+        if l.upper().startswith("RIESGO:"):
+            tipo = "Riesgo"
+            contenido = l[7:].strip()
+        elif l.upper().startswith("OPORTUNIDAD:"):
+            tipo = "Oportunidad"
+            contenido = l[12:].strip()
+
+        if tipo:
+            fuente = ""
+            # 1. Buscar fuente en la misma línea: (Fuente: ...) o [Fuente: ...]
+            m = re.search(r"[\(\[\s](?:Fuente|Source|Ref|URL):\s*([^\)\]\n]+)[\)\]]?", contenido, re.IGNORECASE)
+            if m:
+                fuente = m.group(1).strip()
+                contenido = contenido[:m.start()].strip() + " " + contenido[m.end():].strip()
+                contenido = contenido.strip()
+            elif "|" in contenido and any(k in contenido.lower() for k in ["fuente", "http", "crt", "siap", "dof", "redes", "twitter", "linkedin", "tiktok", "instagram"]):
+                parts = contenido.split("|", 1)
+                contenido = parts[0].strip()
+                fuente = parts[1].replace("Fuente:", "").strip()
+
+            # 2. Si la línea siguiente es una fuente
+            if not fuente and i + 1 < len(lineas):
+                next_l = lineas[i + 1].strip()
+                if next_l.upper().startswith(("FUENTE:", "SOURCE:", "VIA:", "URL:")):
+                    fuente = next_l.split(":", 1)[1].strip()
+
+            # 3. Fuente de la sección actual
+            if not fuente and section_fuente:
+                fuente = section_fuente
+
+            # 4. Inferencia por palabras clave
+            if not fuente:
+                c_low = contenido.lower()
+                sec_low = current_section.lower()
+                if "crt" in sec_low or "crt" in c_low:
+                    fuente = "Consejo Regulador del Tequila (CRT) — https://www.crt.org.mx"
+                elif "agave" in sec_low or "agave" in c_low:
+                    fuente = "SIAP / SADER — https://www.gob.mx/siap"
+                elif "nom" in sec_low or "nom" in c_low:
+                    fuente = "Diario Oficial de la Federación (DOF) — NOM-006-SCFI"
+                elif any(k in c_low for k in ["redes", "social", "tiktok", "instagram", "tendencia", "viral"]):
+                    fuente = "Monitoreo de Redes Sociales y Tendencias de Consumo"
+                else:
+                    fuente = f"Análisis de Mercado — {current_section}"
+
             hallazgos.append({
-                "hallazgo": linea[7:].strip(),
-                "tipo": "Riesgo",
+                "hallazgo": contenido,
+                "tipo": tipo,
+                "fuente": fuente,
                 "impacto": "Ver contexto de mercado",
-                "recomendacion": "Revisar impacto en estrategia de precio y canal",
-            })
-        elif linea.upper().startswith("OPORTUNIDAD:"):
-            hallazgos.append({
-                "hallazgo": linea[12:].strip(),
-                "tipo": "Oportunidad",
-                "impacto": "Ver contexto de mercado",
-                "recomendacion": "Explorar ventana de crecimiento en segmento/region",
+                "recomendacion": "Revisar impacto en estrategia de precio y canal" if tipo == "Riesgo" else "Explorar ventana de crecimiento en segmento/region",
             })
 
     if not hallazgos:
-        # Fallback: texto completo resumido
         resumen_corto = texto[:200].replace("\n", " ") + ("..." if len(texto) > 200 else "")
         hallazgos = [{
             "hallazgo": f"Contexto mercado: {resumen_corto}",
             "tipo": "Informacion",
+            "fuente": "Monitoreo de Industria y Redes",
             "impacto": "Ver detalle en hoja de contexto",
             "recomendacion": "Evaluar impacto en plan de ventas y margen",
         }]

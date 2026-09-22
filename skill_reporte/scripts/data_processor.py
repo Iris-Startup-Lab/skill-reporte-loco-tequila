@@ -56,6 +56,111 @@ def _detect_encoding(filepath: str) -> str:
         return "latin-1"
 
 
+def _clean_header_if_needed(df: pd.DataFrame) -> pd.DataFrame:
+    """Si la tabla cargada tiene filas de títulos/blanco o columnas como 'Unnamed: X', busca en las primeras 15 filas la cabecera real con más coincidencias."""
+    if df is None or df.empty:
+        return df
+
+    keywords = [
+        "articulo", "artículo", "sku", "producto", "canal", "semana", "cliente",
+        "venta", "unidades", "region", "región", "territorio", "cogs", "mes",
+        "precio", "botella", "cajas", "monto", "año", "anio", "year"
+    ]
+
+    header_matches = sum(1 for kw in keywords if any(kw in str(c).lower() for c in df.columns))
+    unnamed_count = sum(1 for c in df.columns if str(c).startswith("Unnamed:"))
+
+    # Si la cabecera actual ya tiene 3 o más palabras clave y pocos Unnamed, ya es una buena cabecera
+    if header_matches >= 3 and unnamed_count <= 1:
+        return df
+
+    best_row_idx = None
+    best_matches = header_matches
+
+    for i in range(min(15, len(df))):
+        row_vals = [str(v).lower().strip() for v in df.iloc[i].dropna()]
+        matches = sum(1 for kw in keywords if any(kw in rv for rv in row_vals))
+        if matches > best_matches and matches >= 2:
+            best_matches = matches
+            best_row_idx = i
+
+    if best_row_idx is not None:
+        new_cols = [
+            str(c).strip() if pd.notna(c) and str(c).strip() != "" else f"col_{idx}"
+            for idx, c in enumerate(df.iloc[best_row_idx])
+        ]
+        df = df.iloc[best_row_idx + 1:].copy().reset_index(drop=True)
+        df.columns = new_cols
+
+    return df
+
+
+def _find_best_excel_sheet(filepath: str, sheets: list[str]) -> str:
+    """
+    Selecciona inteligentemente la mejor hoja de un archivo Excel considerando:
+    1. Si solo hay 1 hoja (ej. 'Hoja 1', 'Sheet1', o cualquier nombre), se usa directamente.
+    2. Si hay hoja con nombre explícito de base de datos/data ('bdd', 'bd', 'data', 'base').
+    3. Si hay hojas estándar ('hoja 1', 'sheet1', 'plan', 'presupuesto').
+    4. Inspección de contenido en las primeras filas buscando columnas clave de ventas/plan.
+    """
+    if not sheets:
+        return 0
+    if len(sheets) == 1:
+        return sheets[0]
+
+    keywords = [
+        "articulo", "artículo", "sku", "producto", "canal", "semana", "cliente",
+        "venta", "unidades", "botellas", "cogs", "precio", "monto", "año", "anio",
+        "year", "territorio", "region", "región", "cajas"
+    ]
+
+    best_sheet = sheets[0]
+    best_score = -9999
+
+    for s in sheets:
+        s_low = s.strip().lower()
+        score = 0
+
+        # Penalización inmediata para hojas que claramente son tablas pivote o auxiliares
+        if any(neg in s_low for neg in ["tp ", "tabla pivote", "pivot", "grafic", "chart", "portada", "caratula", "menu", "config", "param", "instruccion"]):
+            score -= 100
+
+        # Prioridad por nombre
+        if any(bdd_kw in s_low for bdd_kw in ["bdd", "base de datos", "data", "datos crudos", "raw"]):
+            score += 150
+        elif any(plan_kw in s_low for plan_kw in ["plan", "presupuesto", "semanal", "vs_plan", "actuals"]):
+            score += 90
+        elif any(std_kw in s_low for std_kw in ["hoja 1", "hoja1", "sheet 1", "sheet1", "clean", "detalle"]):
+            score += 70
+        elif any(vta_kw in s_low for vta_kw in ["venta", "resumen"]):
+            score += 40
+
+        # Inspección rápida de contenido en las primeras 6 filas
+        try:
+            sample_df = pd.read_excel(filepath, sheet_name=s, nrows=6)
+            if sample_df is not None and not sample_df.empty:
+                cols_str = " ".join([str(c).lower() for c in sample_df.columns])
+                col_matches = sum(1 for kw in keywords if kw in cols_str)
+                score += col_matches * 25
+
+                sample_text = " ".join([str(v).lower() for v in sample_df.values.flatten() if pd.notna(v)])
+                row_matches = sum(1 for kw in keywords if kw in sample_text)
+                score += min(row_matches, 10) * 10
+
+                if sample_df.shape[1] >= 4:
+                    score += 20
+                if sample_df.shape[1] >= 7:
+                    score += 20
+        except Exception:
+            pass
+
+        if score > best_score:
+            best_score = score
+            best_sheet = s
+
+    return best_sheet
+
+
 def _load_csv(filepath: str) -> pd.DataFrame:
     """Carga un CSV con detección automática de encoding."""
     enc = _detect_encoding(filepath)
@@ -63,7 +168,7 @@ def _load_csv(filepath: str) -> pd.DataFrame:
         df = pd.read_csv(filepath, encoding=enc, low_memory=False)
     except UnicodeDecodeError:
         df = pd.read_csv(filepath, encoding="latin-1", low_memory=False)
-    return df
+    return _clean_header_if_needed(df)
 
 
 def _load_table(filepath: str) -> pd.DataFrame:
@@ -75,15 +180,14 @@ def _load_table(filepath: str) -> pd.DataFrame:
             import openpyxl
             wb = openpyxl.load_workbook(filepath, read_only=True)
             sheets = wb.sheetnames
-            target_sheet = sheets[0]
-            for s in sheets:
-                s_low = s.lower()
-                if "clean" in s_low or "hoja1" in s_low or "bdd" in s_low or "resumen" in s_low or "data" in s_low:
-                    target_sheet = s
-                    break
-            return pd.read_excel(filepath, sheet_name=target_sheet)
-        except Exception:
-            return pd.read_excel(filepath)
+            wb.close()
+            target_sheet = _find_best_excel_sheet(filepath, sheets)
+            df = pd.read_excel(filepath, sheet_name=target_sheet)
+            print(f"[INFO] Hoja seleccionada para '{os.path.basename(filepath)}': '{target_sheet}' (de {len(sheets)} hojas: {sheets})")
+        except Exception as e:
+            print(f"[ADVERTENCIA] Falló selección de hoja ({e}); intentando pd.read_excel por defecto")
+            df = pd.read_excel(filepath)
+        return _clean_header_if_needed(df)
     else:
         return _load_csv(filepath)
 
@@ -181,6 +285,32 @@ def _prev_week(year: int, week: int) -> Tuple[int, int]:
 
 def _same_week_prev_year(year: int, week: int) -> Tuple[int, int]:
     return year - 1, week
+
+
+def _parse_semana_to_str(val, yr: int) -> str:
+    """Parsea de forma robusta cualquier valor de semana (4, 4.0, '4', 'W04', 'Semana 4') a formato 'YYYY-Www'."""
+    if pd.isna(val):
+        return f"{yr}-W01"
+    try:
+        fval = float(val)
+        if not np.isnan(fval):
+            w_int = int(fval)
+            if 1 <= w_int <= 53:
+                return f"{yr}-W{w_int:02d}"
+    except (ValueError, TypeError):
+        pass
+    s = str(val).strip()
+    m = re.search(r"W\s*(\d+)", s, re.IGNORECASE)
+    if m:
+        w_int = int(m.group(1))
+        if 1 <= w_int <= 53:
+            return f"{yr}-W{w_int:02d}"
+    nums = re.findall(r"\b\d+\b", s)
+    if nums:
+        w_int = int(nums[0])
+        if 1 <= w_int <= 53:
+            return f"{yr}-W{w_int:02d}"
+    return f"{yr}-W01"
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +430,8 @@ class LocoDataProcessor:
             sem_cols = [c for c in df.columns if c.lower() in ["semana", "semana_num", "week"]]
             if sem_cols:
                 sem_col = sem_cols[0]
-                def _parse_sem_val(val, yr):
-                    s = str(val).strip()
-                    nums = re.findall(r"\d+", s)
-                    if nums:
-                        w_int = int(nums[-1])
-                        return f"{yr}-W{w_int:02d}"
-                    return f"{yr}-W01"
                 df["semana de venta"] = [
-                    _parse_sem_val(v, y if pd.notna(y) else self.anio)
+                    _parse_semana_to_str(v, int(y) if pd.notna(y) else self.anio)
                     for v, y in zip(df[sem_col], df["anio_num"])
                 ]
             elif df["fecha"].notna().any():
@@ -530,13 +653,14 @@ class LocoDataProcessor:
         # --------------------------------------------------------------
         dfp = self.df_plan.copy()
         if not dfp.empty:
-            # SKU
+            # SKU / Producto
             if "SKU/producto" not in dfp.columns:
-                art_cols = [c for c in dfp.columns if "art" in c.lower()]
-                if art_cols:
-                    dfp["SKU/producto"] = dfp[art_cols[0]]
-                elif "producto" in dfp.columns:
-                    dfp["SKU/producto"] = dfp["producto"]
+                sku_matches = [
+                    c for c in dfp.columns
+                    if any(k in c.lower() for k in ["art", "sku", "producto", "descrip", "material"])
+                ]
+                if sku_matches:
+                    dfp["SKU/producto"] = dfp[sku_matches[0]]
                 else:
                     dfp["SKU/producto"] = "Loco Blanco"
 
@@ -544,7 +668,7 @@ class LocoDataProcessor:
 
             # Canal
             if "canal_reporte" not in dfp.columns:
-                can_cols = [c for c in dfp.columns if "canal" in c.lower()]
+                can_cols = [c for c in dfp.columns if "canal" in c.lower() or "channel" in c.lower()]
                 if can_cols:
                     dfp["canal_reporte"] = dfp[can_cols[0]]
                 else:
@@ -556,20 +680,20 @@ class LocoDataProcessor:
             if "anio" in dfp.columns:
                 dfp["anio_num"] = pd.to_numeric(dfp["anio"], errors="coerce").fillna(self.anio).astype("Int64")
             else:
-                dfp["anio_num"] = pd.Series(self.anio, index=dfp.index).astype("Int64")
-                dfp["anio"] = self.anio
+                yr_cols = [c for c in dfp.columns if c.lower() in ["año", "year", "ejercicio", "anio_num"]]
+                if yr_cols:
+                    dfp["anio_num"] = pd.to_numeric(dfp[yr_cols[0]], errors="coerce").fillna(self.anio).astype("Int64")
+                    dfp["anio"] = dfp["anio_num"]
+                else:
+                    dfp["anio_num"] = pd.Series(self.anio, index=dfp.index).astype("Int64")
+                    dfp["anio"] = self.anio
 
             # Semana
             if "semana de venta" not in dfp.columns:
-                sem_cols = [c for c in dfp.columns if "semana" in c.lower()]
+                sem_cols = [c for c in dfp.columns if "semana" in c.lower() or "week" in c.lower()]
                 if sem_cols:
-                    def _parse_plan_sem(val, yr):
-                        nums = re.findall(r"\d+", str(val))
-                        if nums:
-                            return f"{yr}-W{int(nums[-1]):02d}"
-                        return f"{yr}-W01"
                     dfp["semana de venta"] = [
-                        _parse_plan_sem(v, y if pd.notna(y) else self.anio)
+                        _parse_semana_to_str(v, int(y) if pd.notna(y) else self.anio)
                         for v, y in zip(dfp[sem_cols[0]], dfp["anio_num"])
                     ]
                 else:
@@ -585,7 +709,10 @@ class LocoDataProcessor:
 
             # Unidades / Botellas
             if "plan_botellas" not in dfp.columns:
-                unit_cols = [c for c in dfp.columns if "unidad" in c.lower() or "botella" in c.lower()]
+                unit_cols = [
+                    c for c in dfp.columns
+                    if any(k in c.lower() for k in ["unidad", "botella", "pieza", "cant", "volumen", "qty"])
+                ]
                 if unit_cols:
                     dfp["plan_botellas"] = pd.to_numeric(dfp[unit_cols[0]], errors="coerce").fillna(0)
                 else:
@@ -595,11 +722,18 @@ class LocoDataProcessor:
 
             # Ventas sin impuestos
             if "plan_venta_sin_impuestos" not in dfp.columns:
-                vta_cols = [c for c in dfp.columns if "venta neta" in c.lower() or "plan_venta" in c.lower() or "venta_sin" in c.lower()]
+                vta_cols = [
+                    c for c in dfp.columns
+                    if any(k in c.lower() for k in ["venta neta", "plan_venta", "venta_sin", "presupuesto", "importe", "monto", "plan $", "net sales"])
+                ]
                 if vta_cols:
                     dfp["plan_venta_sin_impuestos"] = pd.to_numeric(dfp[vta_cols[0]], errors="coerce").fillna(0)
                 else:
                     dfp["plan_venta_sin_impuestos"] = 0
+
+            # Venta con impuestos
+            if "plan_venta_con_impuestos" not in dfp.columns:
+                dfp["plan_venta_con_impuestos"] = dfp["plan_venta_sin_impuestos"] * 1.53
 
             # Margen en pesos
             if "plan_margen_pesos" not in dfp.columns:
@@ -608,7 +742,20 @@ class LocoDataProcessor:
                     cogs_tot = pd.to_numeric(dfp[cogs_cols[0]], errors="coerce").fillna(0)
                     dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] - cogs_tot
                 else:
-                    dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] * 0.60
+                    unit_cogs = [c for c in dfp.columns if c.strip().lower() == "cogs" or "costo unitario" in c.lower()]
+                    if unit_cogs:
+                        cogs_u = pd.to_numeric(dfp[unit_cogs[0]], errors="coerce").fillna(0)
+                        dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] - (cogs_u * dfp["plan_botellas"])
+                    else:
+                        dfp["plan_margen_pesos"] = dfp["plan_venta_sin_impuestos"] * 0.60
+
+            # Margen %
+            if "plan_margen_pct" not in dfp.columns:
+                dfp["plan_margen_pct"] = np.where(
+                    dfp["plan_venta_sin_impuestos"] > 0,
+                    dfp["plan_margen_pesos"] / dfp["plan_venta_sin_impuestos"] * 100.0,
+                    0.0
+                )
 
             # Cajas 9L
             if "plan_cajas_9L" not in dfp.columns:
@@ -616,7 +763,7 @@ class LocoDataProcessor:
                 dfp["plan_cajas_9L"] = dfp["plan_botellas"] * ml / 9000.0
 
             for col in ["plan_venta_sin_impuestos", "plan_venta_con_impuestos",
-                        "plan_margen_pesos", "plan_botellas", "plan_cajas_9L"]:
+                        "plan_margen_pesos", "plan_margen_pct", "plan_botellas", "plan_cajas_9L"]:
                 if col in dfp.columns:
                     dfp[col] = pd.to_numeric(dfp[col], errors="coerce").fillna(0)
 
