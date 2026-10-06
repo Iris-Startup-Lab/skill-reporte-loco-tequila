@@ -25,6 +25,7 @@ from design_tokens import (
     HEADER_TEXT, SECTION_SUBTITLE, NEG_VALUE, POS_VALUE,
     PRODUCT_ORDER, PRODUCT_DISPLAY_NAMES, PRODUCT_COLORS,
     CANAL_ORDER, CANAL_COLORS,
+    REGION_ORDER, REGION_DISPLAY_NAMES, REGION_MAPPING, normalize_region,
     CHART_PLAN_LINE, CHART_LASTYEAR_AREA, CHART_LASTYEAR_LINE, CHART_GRID,
     fmt_currency, fmt_int,
 )
@@ -85,15 +86,16 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
 
     plan_df = proc.dfp
 
-    territorios = sorted([
-        str(e) for e in proc.df["region_o_estado"].dropna().unique()
-        if str(e).strip() and str(e).strip() != "0" and str(e).strip().lower() != "nan"
-    ])
+    has_region_plan = bool(
+        plan_df is not None and not plan_df.empty
+        and "region_norm" in plan_df.columns
+        and plan_df["region_norm"].notna().any()
+    )
 
     groupings = [
-        ("producto",   PRODUCT_ORDER, "producto",        PRODUCT_DISPLAY_NAMES, True),
-        ("canal",      CANAL_ORDER,   "canal_norm",      {k: k for k in CANAL_ORDER}, True),
-        ("territorio", territorios,   "region_o_estado", {k: k for k in territorios}, False),
+        ("producto", PRODUCT_ORDER, "producto",    PRODUCT_DISPLAY_NAMES, True),
+        ("canal",    CANAL_ORDER,   "canal_norm",  {k: k for k in CANAL_ORDER}, True),
+        ("region",   REGION_ORDER,  "region_norm", {k: k for k in REGION_ORDER}, has_region_plan),
     ]
 
     result = {}
@@ -166,8 +168,9 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
                     "var_anio_pct":   (round(v_anio_pct, 1) if v_anio_pct is not None else None),
                 })
 
-            if key == "territorio":
-                rows.sort(key=lambda x: x["actual"], reverse=True)
+            if key == "region":
+                # Respetar el orden canónico de REGION_ORDER (CDMX, Bajío, Monterrey, Los Cabos, Puebla, Otros)
+                pass
 
             # Fila Total
             if has_plan:
@@ -198,6 +201,8 @@ def _build_comparativo_8col(proc: LocoDataProcessor) -> dict:
 
             result[key][mode] = rows
 
+    # Alias para compatibilidad hacia atrás
+    result["territorio"] = result["region"]
     return result
 
 
@@ -217,6 +222,9 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
     productos = [PRODUCT_DISPLAY_NAMES.get(p, p) for p in PRODUCT_ORDER if p in df["producto"].unique()]
     canales   = [c for c in CANAL_ORDER if c in df["canal"].unique()]
     estados   = sorted([str(e) for e in df["estado"].dropna().unique().tolist() if str(e).strip()])
+    regiones  = [r for r in REGION_ORDER if r in df["region"].unique()]
+    if not regiones:
+        regiones = [r for r in REGION_ORDER if r != "Otros"]
     clientes  = sorted([str(cl) for cl in df["cliente"].dropna().unique().tolist() if str(cl).strip()])
 
     # Agrupar tabla transaccional limpia para TODOS los registros del dataset
@@ -226,7 +234,7 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
     # que antes era una sola fila en dos), así sobrevive al reset_index() y
     # llega a cada registro de DATA.tabla para poder filtrarlo en JS.
     df_tabla = df.groupby(
-        ["anio", "semana_num", "semana", "producto_display", "canal", "estado", "cliente",
+        ["anio", "semana_num", "semana", "producto_display", "canal", "estado", "region", "cliente",
          "comparable_plan"]
     ).agg(
         venta_sin_iva=("venta_sin_iva", "sum"),
@@ -249,6 +257,7 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
         # bool(...) evita que json.dumps falle con numpy.bool_ (dtype nativo
         # de pandas tras el groupby de una columna booleana).
         rec["comparable_plan"] = bool(rec["comparable_plan"])
+        rec["region"] = str(rec.get("region", "Otros"))
         for k, v in rec.items():
             if isinstance(v, float) and (v != v):
                 rec[k] = 0
@@ -275,20 +284,25 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
         needed = {"anio_num", "semana_num", "producto", "canal_norm",
                   "plan_venta_sin_impuestos"}
         if needed.issubset(set(dfp.columns)):
-            grp_d = dfp.groupby(
-                ["anio_num", "semana_num", "producto", "canal_norm"]
-            )["plan_venta_sin_impuestos"].sum().reset_index()
+            has_p_reg = bool("region_norm" in dfp.columns and dfp["region_norm"].notna().any())
+            grp_cols = ["anio_num", "semana_num", "producto", "canal_norm"]
+            if has_p_reg:
+                grp_cols.append("region_norm")
+            grp_d = dfp.groupby(grp_cols)["plan_venta_sin_impuestos"].sum().reset_index()
             for _, r in grp_d.iterrows():
                 if pd.isna(r["anio_num"]) or pd.isna(r["semana_num"]):
                     continue
-                plan_detail.append({
+                p_item = {
                     "k": f"{int(r['anio_num'])}-W{int(r['semana_num']):02d}",
                     "y": int(r["anio_num"]),
                     "w": int(r["semana_num"]),
                     "p": PRODUCT_DISPLAY_NAMES.get(r["producto"], r["producto"]),
                     "c": r["canal_norm"],
                     "v": round(float(r["plan_venta_sin_impuestos"]), 2),
-                })
+                }
+                if has_p_reg and pd.notna(r.get("region_norm")):
+                    p_item["r"] = str(r["region_norm"])
+                plan_detail.append(p_item)
 
     # Comparativo 8 Columnas (pestaña nueva) — misma fuente de verdad que el
     # PDF (_draw_kpi_table): se calcula en Python, no se recalcula en JS.
@@ -318,6 +332,7 @@ def _prepare_data(proc: LocoDataProcessor, contexto_mercado: Optional[dict] = No
             "productos": productos,
             "canales": canales,
             "estados": estados,
+            "regiones": regiones,
             "clientes": clientes,
         },
         "kpis_initial": {
@@ -1021,7 +1036,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       <span class="subtabs-label">Tablas:</span>
       <button class="subtab-link" onclick="jumpToSection('card-comp8-producto', 'comparativo8')">📦 Por Producto</button>
       <button class="subtab-link" onclick="jumpToSection('card-comp8-canal', 'comparativo8')">🏪 Por Canal</button>
-      <button class="subtab-link" onclick="jumpToSection('card-comp8-territorio', 'comparativo8')">🗺️ Por Territorio</button>
+      <button class="subtab-link" onclick="jumpToSection('card-comp8-region', 'comparativo8')">🗺️ Por Región</button>
     </div>
   </nav>
 
@@ -1201,7 +1216,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
   </div>
 
   <div class="table-card" id="card-comp8-producto">
-    <div class="table-header"><span>Por Producto</span></div>
+    <div class="table-header"><span id="comp8TitleProducto">Por Producto</span></div>
     <div class="table-wrapper" style="max-height:none;">
       <table class="comp8-table">
         <thead>
@@ -1222,7 +1237,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
   </div>
 
   <div class="table-card" id="card-comp8-canal">
-    <div class="table-header"><span>Por Canal</span></div>
+    <div class="table-header"><span id="comp8TitleCanal">Por Canal</span></div>
     <div class="table-wrapper" style="max-height:none;">
       <table class="comp8-table">
         <thead>
@@ -1242,23 +1257,23 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     </div>
   </div>
 
-  <div class="table-card" id="card-comp8-territorio">
-    <div class="table-header"><span>Por Territorio</span></div>
-    <div class="table-wrapper" style="max-height: 480px; overflow-y: auto;">
+  <div class="table-card" id="card-comp8-region">
+    <div class="table-header"><span id="comp8TitleRegion">Por Región</span></div>
+    <div class="table-wrapper" style="max-height:none;">
       <table class="comp8-table">
         <thead>
           <tr>
             <th>Año Ant.</th>
             <th>Plan</th>
             <th class="comp8-actual">Actual</th>
-            <th class="comp8-cat">Territorio</th>
+            <th class="comp8-cat">Categoría</th>
             <th>Var Plan $</th>
             <th>Var Plan %</th>
             <th>Var Año $</th>
             <th>Var Año %</th>
           </tr>
         </thead>
-        <tbody id="comp8TableTerritorio"></tbody>
+        <tbody id="comp8TableRegion"></tbody>
       </table>
     </div>
   </div>
@@ -1548,6 +1563,21 @@ function setComparativo8Mode(mode) {{
   renderComparativo8Col();
 }}
 
+function updateComparativo8Titles(targetWeek, targetYear) {{
+  const isYTD = (comparativo8Mode === 'anual');
+  const weekLabel = `semana ${{targetWeek}} de ${{targetYear}}`;
+  const suffix = isYTD ? ` acumulado a ${{weekLabel}} (YTD)` : ` ${{weekLabel}}`;
+
+  const elProd = document.getElementById('comp8TitleProducto');
+  if (elProd) elProd.textContent = 'Por Producto' + suffix;
+
+  const elCanal = document.getElementById('comp8TitleCanal');
+  if (elCanal) elCanal.textContent = 'Por Canal' + suffix;
+
+  const elReg = document.getElementById('comp8TitleRegion') || document.getElementById('comp8TitleTerritorio');
+  if (elReg) elReg.textContent = 'Por Región' + suffix;
+}}
+
 function computeComparativo8(groupKey) {{
   const anioVal    = document.getElementById('fAnio') ? document.getElementById('fAnio').value : 'all';
   const semanaVal  = document.getElementById('fSemana') ? document.getElementById('fSemana').value : 'all';
@@ -1573,11 +1603,13 @@ function computeComparativo8(groupKey) {{
     return (comparativo8Mode === 'semanal') ? (r.semana_num === targetWeek) : (r.semana_num <= targetWeek);
   }};
 
+  const isRegionGroup = (groupKey === 'region' || groupKey === 'territorio');
+
   // Filtros cruzados (aplica los filtros laterales excepto la dimensión que se está agrupando)
   const matchesCrossFilters = (r, ignoreKey) => {{
     if (ignoreKey !== 'producto' && prodVal !== 'all' && r.producto_display !== prodVal) return false;
     if (ignoreKey !== 'canal' && canalVal !== 'all' && r.canal !== canalVal) return false;
-    if (ignoreKey !== 'territorio' && estadoVal !== 'all' && r.estado !== estadoVal) return false;
+    if (!isRegionGroup && estadoVal !== 'all' && r.estado !== estadoVal) return false;
     if (clienteVal !== 'all' && r.cliente !== clienteVal) return false;
     if (compVal === 'comparables' && !r.comparable_plan) return false;
     if (compVal === 'no_comparables' && r.comparable_plan) return false;
@@ -1602,17 +1634,25 @@ function computeComparativo8(groupKey) {{
     }} else {{
       categories = [...DATA.filtros.canales];
     }}
-  }} else if (groupKey === 'territorio') {{
+  }} else if (isRegionGroup) {{
     if (estadoVal !== 'all') {{
-      categories = [estadoVal];
+      const matchRec = DATA.tabla.find(r => r.estado === estadoVal);
+      categories = [matchRec ? (matchRec.region || matchRec.estado) : estadoVal];
+    }} else if (Array.isArray(DATA.filtros.regiones) && DATA.filtros.regiones.length > 0) {{
+      categories = [...DATA.filtros.regiones];
     }} else {{
       const terSet = new Set();
       DATA.tabla.forEach(r => {{
-        if (r.estado && r.estado !== '0' && r.estado.toLowerCase() !== 'nan') {{
-          terSet.add(r.estado);
+        const reg = r.region || r.estado;
+        if (reg && reg !== '0' && reg.toLowerCase() !== 'nan' && reg !== 'Otros') {{
+          terSet.add(reg);
         }}
       }});
       categories = Array.from(terSet);
+    }}
+    const hasOtrosReg = DATA.tabla.some(r => (isCurrentPeriod(r) || isPrevPeriod(r)) && matchesCrossFilters(r, 'region') && (r.region === 'Otros' || (!categories.includes(r.region) && r.region)));
+    if (hasOtrosReg && !categories.includes('Otros')) {{
+      categories.push('Otros');
     }}
   }}
 
@@ -1621,7 +1661,10 @@ function computeComparativo8(groupKey) {{
   const aggPrev = {{}};
   DATA.tabla.forEach(r => {{
     if (!matchesCrossFilters(r, groupKey)) return;
-    const cat = (groupKey === 'producto') ? r.producto_display : ((groupKey === 'canal') ? r.canal : r.estado);
+    let cat = null;
+    if (groupKey === 'producto') cat = r.producto_display;
+    else if (groupKey === 'canal') cat = r.canal;
+    else if (isRegionGroup) cat = r.region || r.estado;
     if (!cat) return;
     if (isCurrentPeriod(r)) {{
       aggCur[cat] = (aggCur[cat] || 0) + (r.venta_sin_iva || 0);
@@ -1633,7 +1676,7 @@ function computeComparativo8(groupKey) {{
   // Pre-agregación de Plan
   const planAgg = {{}};
   const hasPlanDetails = Array.isArray(DATA.plan_detail) && DATA.plan_detail.length > 0;
-  const planApplies = (estadoVal === 'all' && clienteVal === 'all' && compVal !== 'no_comparables');
+  const planApplies = (clienteVal === 'all' && compVal !== 'no_comparables');
 
   if (planApplies && hasPlanDetails) {{
     DATA.plan_detail.forEach(p => {{
@@ -1649,10 +1692,15 @@ function computeComparativo8(groupKey) {{
       }} else if (groupKey === 'canal') {{
         if (prodVal !== 'all' && p.p !== prodVal) return;
         planAgg[p.c] = (planAgg[p.c] || 0) + (p.v || 0);
+      }} else if (isRegionGroup && p.r) {{
+        if (prodVal !== 'all' && p.p !== prodVal) return;
+        if (canalVal !== 'all' && p.c !== canalVal) return;
+        planAgg[p.r] = (planAgg[p.r] || 0) + (p.v || 0);
       }}
     }});
   }}
 
+  const hasAnyPlanForGroup = Object.keys(planAgg).length > 0;
   const rows = [];
   let totalCur = 0;
   let totalPrev = 0;
@@ -1667,7 +1715,7 @@ function computeComparativo8(groupKey) {{
     let vPlanAbs = null;
     let vPlanPct = null;
 
-    if (groupKey !== 'territorio' && cat !== 'Otros' && planApplies && hasPlanDetails) {{
+    if (hasAnyPlanForGroup && cat !== 'Otros' && planApplies && hasPlanDetails) {{
       plv = planAgg[cat] || 0;
       vPlanAbs = cv - plv;
       vPlanPct = (plv > 0) ? (vPlanAbs / plv * 100) : 0;
@@ -1692,11 +1740,6 @@ function computeComparativo8(groupKey) {{
       var_anio_pct: vAnioPct,
     }});
   }});
-
-  // Para territorio: ordenar por venta actual descendente para presentación ejecutiva
-  if (groupKey === 'territorio') {{
-    rows.sort((a, b) => b.actual - a.actual);
-  }}
 
   // Fila Total
   let totalVarPlanAbs = null;
@@ -1727,9 +1770,19 @@ function computeComparativo8(groupKey) {{
 }}
 
 function renderComparativo8Col() {{
+  const anioVal   = document.getElementById('fAnio') ? document.getElementById('fAnio').value : 'all';
+  const semanaVal = document.getElementById('fSemana') ? document.getElementById('fSemana').value : 'all';
+  const targetYear = (anioVal !== 'all') ? Number(anioVal) : DATA.meta.anio;
+  const targetWeek = (semanaVal !== 'all') ? Number(semanaVal.replace('W','')) : DATA.meta.semana;
+
+  updateComparativo8Titles(targetWeek, targetYear);
   renderComparativo8Table('producto', 'comp8TableProducto');
   renderComparativo8Table('canal', 'comp8TableCanal');
-  renderComparativo8Table('territorio', 'comp8TableTerritorio');
+  if (document.getElementById('comp8TableRegion')) {{
+    renderComparativo8Table('region', 'comp8TableRegion');
+  }} else if (document.getElementById('comp8TableTerritorio')) {{
+    renderComparativo8Table('region', 'comp8TableTerritorio');
+  }}
 }}
 
 function renderComparativo8Table(groupKey, tbodyId) {{

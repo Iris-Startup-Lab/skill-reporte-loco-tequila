@@ -304,20 +304,23 @@ reaparece. Sin errores de consola en ningún estado.
 - **CSS**: Se removió `position: sticky` y `box-shadow` de `.kpi-sticky-container`, permitiendo que las tarjetas de métricas hagan scroll natural sin tapar el contenido. Se agregó `position: sticky; top: var(--header-height, 86px); z-index: 490;` a `.tab-nav` con sombra sutil para fijar la navegación de pestañas al hacer scroll.
 - **Comparativo 8 Columnas dinámico y filtrable**: Se implementó `computeComparativo8(groupKey)` en JS (`scripts/dashboard_generator.py`), calculando dinámicamente `actual`, `anio_anterior`, `plan`, variaciones vs Plan ($ y %) y vs Año Anterior ($ y %) respetando los filtros de Año, Semana, Producto, Canal, Estado/Territorio, Cliente, Comparables a Plan y la modalidad (Semanal vs Anual YTD). Se enlaza a `updateDashboard()` para que cualquier cambio de filtro en el panel actualice inmediatamente las tablas.
 - **Comparativo 8 Columnas por Territorio**: Se agregó la tabla "Por Territorio" (`#comp8TableTerritorio`) tanto en la pre-generación en Python (`_build_comparativo_8col`) como en el motor de recálculo dinámico en JS (`computeComparativo8('territorio')`), ordenando los estados de mayor a menor venta actual e incluyendo la fila de Total.
-- **Validación**: Pruebas de sintaxis JS en Node y recálculo con filtros cruzados verificaron cuadratura al centavo entre Producto, Canal y Territorio, y generación limpia de los 3 formatos (PDF, XLSX y HTML).
+## Corrección adicional — Títulos dinámicos con semana/año y Match de Región en Comparativo 8 Columnas
 
-## Pendiente / fuera de alcance de esta sesión
-- Confirmar con el cliente si "No Comparables con Plan" debe quedarse como un solo
-  bucket (Agave + Servicios + Refacturación + Venta Activo + Transformación de
-  Liquido) o separarse — Fernando ya envió la pregunta, en espera de respuesta.
-- Se encontraron y arreglaron de paso dos gaps de mapeo reales (no relacionados a la
-  categorización de negocio): SKU `"Loco 269 ml"` sin alias en
-  `EXPANDED_PRODUCT_MAPPING`, y canal `"Venta Directa Off Trade"` sin alias en
-  `CANAL_MAPPING` — ambos ya agregados.
-- El dataset de muestra (`data_for_test_and_simulation/`) también tenía SKUs sin
-  mapear (`"Puro Corazon Ed. Lim Serp"`, `"Puro Corazon Ed. Lim Colibri"`, ~$7.7M) que
-  antes desaparecían silenciosamente de las tablas por producto — detectados por el
-  nuevo log de advertencia, quedan agrupados en `"Otros"` por ahora; pendiente decidir
-  si son variantes reales de Puro Corazón que merecen su propio alias.
-- `get_rolling_52()` ya tenía su propio manejo seguro (retorna `None` si hay menos de
-  40 semanas con datos) — no se tocó.
+**Reporte del usuario**:
+1. En la pestaña de 8 columnas del Dashboard HTML, agregar la semana vista en el encabezado de cada tabla (ej. `"Por Producto semana 34 de 2026"`), mostrando la última semana elegida por el usuario y actualizándose dinámicamente con los filtros de semana y año (y modo YTD).
+2. En la tabla de 8 columnas de región (antes llamada "Por Territorio"), corregir el match ya que no coincidía ni se parecía a las otras dos tablas de 8 columnas (Plan salía como N/A, discrepancias de nombres entre ventas y plan como CDMX/BAJIO/MTY/CABO/PUEBLA vs Monterrey/Los Cabos/Arenal/Queretaro, y altura fija con scrollbar).
+
+**Solución**:
+- **Títulos dinámicos de las 3 tablas de 8 columnas**:
+  Se asignaron identificadores `comp8TitleProducto`, `comp8TitleCanal` y `comp8TitleRegion` y se implementó `updateComparativo8Titles(targetWeek, targetYear)` en JS (`scripts/dashboard_generator.py`). Cada vez que el usuario modifica los filtros de Semana (`fSemana`), Año (`fAnio`) o la modalidad (Semanal vs Anual YTD), los títulos se actualizan reactivamente:
+  - Modo Semanal: `"Por Producto semana 34 de 2026"`, `"Por Canal semana 34 de 2026"`, `"Por Región semana 34 de 2026"`.
+  - Modo Anual: `"Por Producto acumulado a semana 34 de 2026 (YTD)"`, etc.
+  - Si el filtro de semana está en "Todas", toma la semana activa o última evaluada (`DATA.meta.semana`).
+- **Homologación y Match de Región entre Ventas y Plan**:
+  - En `scripts/design_tokens.py` se definieron `REGION_ORDER` (`["CDMX", "Bajío", "Monterrey", "Los Cabos", "Puebla", "Otros"]`), `REGION_MAPPING` y la función `normalize_region()` para mapear coherentemente tanto acrónimos del presupuesto (`BAJIO`, `MTY`, `CABO`, `PUEBLA`, `CDMX`) como ubicaciones de facturación (`Arenal`, `Queretaro`, `Cava Sautto`, `Monterrey`, `Los Cabos`, `Puebla`, etc.) y entidades federativas.
+  - En `scripts/data_processor.py` (`_enrich` y `get_dataframe_dashboard`), se agregó la columna `region_norm` en ventas reales y en `dfp` (Plan), asegurando que tanto las ventas como el presupuesto se agreguen sobre la misma dimensión canónica.
+  - En `scripts/dashboard_generator.py`:
+    - `_build_comparativo_8col` ahora calcula la dimensión `"region"` con `has_region_plan = True` cuando el presupuesto trae desglose regional (respetando alias `"territorio"`).
+    - En `computeComparativo8('region')` de JS, se pre-agrega el Plan por región (`p.r`), se calculan las variaciones vs Plan ($ y %) y vs Año Anterior ($ y %), y el total cuadra al centavo con Producto y Canal.
+    - Se actualizó el HTML para llamar a la tabla `"Por Región"` (`card-comp8-region`), la cabecera de la 4ta columna como `"Categoría"` (idéntica a las otras dos tablas) y se retiró el `max-height: 480px` para que se visualice completa y uniforme (`max-height: none`).
+

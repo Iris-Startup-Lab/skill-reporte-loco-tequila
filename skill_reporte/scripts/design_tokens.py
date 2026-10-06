@@ -111,6 +111,104 @@ CANAL_MAPPING = {
 }
 
 # ---------------------------------------------------------------------------
+# 3.1. Regiones canónicas y normalización
+# ---------------------------------------------------------------------------
+REGION_ORDER = [
+    "CDMX",
+    "Bajío",
+    "Monterrey",
+    "Los Cabos",
+    "Puebla",
+    "Otros",
+]
+
+REGION_DISPLAY_NAMES = {
+    "CDMX":      "CDMX",
+    "Bajío":     "Bajío",
+    "Monterrey": "Monterrey",
+    "Los Cabos": "Los Cabos",
+    "Puebla":    "Puebla",
+    "Otros":     "Otros",
+}
+
+REGION_MAPPING = {
+    # Acrónimos de Plan
+    "CDMX":                 "CDMX",
+    "BAJIO":                "Bajío",
+    "BAJÍO":                "Bajío",
+    "MTY":                  "Monterrey",
+    "CABO":                 "Los Cabos",
+    "CABOS":                "Los Cabos",
+    "PUEBLA":               "Puebla",
+    # Ventas reales / Ubicaciones específicas
+    "Arenal":               "Bajío",
+    "El Arenal":            "Bajío",
+    "Queretaro":            "Bajío",
+    "Querétaro":            "Bajío",
+    "Quetetaro":            "Bajío",
+    "Cava Sautto":          "Bajío",
+    "Monterrey":            "Monterrey",
+    "Los Cabos":            "Los Cabos",
+    "Cabo":                 "Los Cabos",
+    "Cabos":                "Los Cabos",
+    "Puebla":               "Puebla",
+    # Entidades federativas
+    "Distrito Federal":     "CDMX",
+    "Ciudad de México":     "CDMX",
+    "Ciudad de Mexico":     "CDMX",
+    "Estado de México":     "CDMX",
+    "Estado de Mexico":     "CDMX",
+    "Edomex":               "CDMX",
+    "Guanajuato":           "Bajío",
+    "Jalisco":              "Bajío",
+    "Aguascalientes":       "Bajío",
+    "San Luis Potosí":      "Bajío",
+    "San Luis Potosi":      "Bajío",
+    "Zacatecas":            "Bajío",
+    "Michoacán":            "Bajío",
+    "Michoacan":            "Bajío",
+    "Colima":               "Bajío",
+    "Nayarit":              "Bajío",
+    "Nuevo León":           "Monterrey",
+    "Nuevo Leon":           "Monterrey",
+    "Coahuila":             "Monterrey",
+    "Tamaulipas":           "Monterrey",
+    "Chihuahua":            "Monterrey",
+    "Durango":              "Monterrey",
+    "Baja California Sur":  "Los Cabos",
+    "Baja California":      "Los Cabos",
+    "Sinaloa":              "Los Cabos",
+    "Sonora":               "Los Cabos",
+    "Tlaxcala":             "Puebla",
+    "Veracruz":             "Puebla",
+    "Hidalgo":              "Puebla",
+    "Morelos":              "Puebla",
+    "Guerrero":             "Puebla",
+    "Oaxaca":               "Puebla",
+    "Chiapas":              "Puebla",
+    "Tabasco":              "Puebla",
+    "Campeche":             "Puebla",
+    "Yucatán":              "Puebla",
+    "Yucatan":              "Puebla",
+    "Quintana Roo":         "Puebla",
+}
+
+def normalize_region(val) -> str:
+    """Normaliza cualquier nombre o acrónimo de estado/región a la región canónica."""
+    if val is None or (isinstance(val, float) and val != val):
+        return "Otros"
+    s = str(val).strip()
+    if not s or s.lower() in ["nan", "none", "0", "sin estado", "nacional", "otros"]:
+        return "Otros"
+    if s in REGION_MAPPING:
+        return REGION_MAPPING[s]
+    for k, v in REGION_MAPPING.items():
+        if s.lower() == k.lower():
+            return v
+    return "Otros"
+
+
+# ---------------------------------------------------------------------------
 # 4. Colores de elementos de gráfica y estados
 # ---------------------------------------------------------------------------
 CHART_PLAN_LINE       = "#E23B2E"   # línea roja "Plan de ventas"

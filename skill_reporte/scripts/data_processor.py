@@ -27,7 +27,8 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
 from design_tokens import (
-    PRODUCT_ORDER, PRODUCT_DISPLAY_NAMES, CANAL_ORDER, CANAL_MAPPING
+    PRODUCT_ORDER, PRODUCT_DISPLAY_NAMES, CANAL_ORDER, CANAL_MAPPING,
+    REGION_ORDER, REGION_DISPLAY_NAMES, REGION_MAPPING, normalize_region
 )
 
 # Categoría de negocio (columna cruda "Categoria" del Excel del cliente) que
@@ -56,8 +57,12 @@ def _detect_encoding(filepath: str) -> str:
         return "latin-1"
 
 
-def _clean_header_if_needed(df: pd.DataFrame) -> pd.DataFrame:
-    """Si la tabla cargada tiene filas de títulos/blanco o columnas como 'Unnamed: X', busca en las primeras 15 filas la cabecera real con más coincidencias."""
+def _clean_header_if_needed(df: pd.DataFrame, origen: str = "") -> pd.DataFrame:
+    """Si la tabla cargada tiene filas de títulos/blanco (o vacías) antes de la
+    cabecera real, o columnas como 'Unnamed: X', busca en las primeras filas
+    la fila que mejor coincide con nombres de columna esperados y la promueve
+    a encabezado. Cubre el caso típico del cliente donde la fila 1 del Excel
+    viene vacía (título/logo) y la cabecera real está una o más filas abajo."""
     if df is None or df.empty:
         return df
 
@@ -77,20 +82,33 @@ def _clean_header_if_needed(df: pd.DataFrame) -> pd.DataFrame:
     best_row_idx = None
     best_matches = header_matches
 
-    for i in range(min(15, len(df))):
+    # Se amplía la ventana de búsqueda a 25 filas: algunos archivos del
+    # cliente traen varias filas de título/logo/espacio en blanco antes del
+    # encabezado real.
+    for i in range(min(25, len(df))):
         row_vals = [str(v).lower().strip() for v in df.iloc[i].dropna()]
+        if not row_vals:
+            continue  # fila completamente vacía: no puede ser encabezado
         matches = sum(1 for kw in keywords if any(kw in rv for rv in row_vals))
         if matches > best_matches and matches >= 2:
             best_matches = matches
             best_row_idx = i
 
     if best_row_idx is not None:
+        print(f"[ADVERTENCIA] {origen}: la primera fila no contenía encabezados válidos; "
+              f"se usó la fila {best_row_idx + 2} del archivo como cabecera real.")
         new_cols = [
             str(c).strip() if pd.notna(c) and str(c).strip() != "" else f"col_{idx}"
             for idx, c in enumerate(df.iloc[best_row_idx])
         ]
         df = df.iloc[best_row_idx + 1:].copy().reset_index(drop=True)
         df.columns = new_cols
+        # Filas totalmente vacías que hayan quedado por encima de la cabecera
+        # detectada (o filas basura intermedias) no deben pasar como datos.
+        df = df.dropna(how="all").reset_index(drop=True)
+    elif unnamed_count > 0:
+        print(f"[ADVERTENCIA] {origen}: no se encontró una fila de encabezado clara en las "
+              f"primeras 25 filas; se usará la cabecera original (columnas sin nombre: {unnamed_count}).")
 
     return df
 
@@ -135,10 +153,13 @@ def _find_best_excel_sheet(filepath: str, sheets: list[str]) -> str:
         elif any(vta_kw in s_low for vta_kw in ["venta", "resumen"]):
             score += 40
 
-        # Inspección rápida de contenido en las primeras 6 filas
+        # Inspección de contenido en las primeras filas. Se usan 15 filas (no 6)
+        # porque algunos archivos del cliente traen varias filas de título o
+        # espacio en blanco antes de la cabecera real, y con una ventana muy
+        # corta el puntaje de la hoja correcta podía salir en 0 por casualidad.
         try:
-            sample_df = pd.read_excel(filepath, sheet_name=s, nrows=6)
-            if sample_df is not None and not sample_df.empty:
+            sample_df = pd.read_excel(filepath, sheet_name=s, nrows=15)
+            if sample_df is not None and not sample_df.dropna(how="all").empty:
                 cols_str = " ".join([str(c).lower() for c in sample_df.columns])
                 col_matches = sum(1 for kw in keywords if kw in cols_str)
                 score += col_matches * 25
@@ -151,6 +172,10 @@ def _find_best_excel_sheet(filepath: str, sheets: list[str]) -> str:
                     score += 20
                 if sample_df.shape[1] >= 7:
                     score += 20
+            else:
+                # Hoja vacía (sin ningún dato en las primeras 15 filas): muy
+                # probablemente una hoja auxiliar/plantilla, no la fuente real.
+                score -= 200
         except Exception:
             pass
 
@@ -168,13 +193,51 @@ def _load_csv(filepath: str) -> pd.DataFrame:
         df = pd.read_csv(filepath, encoding=enc, low_memory=False)
     except UnicodeDecodeError:
         df = pd.read_csv(filepath, encoding="latin-1", low_memory=False)
-    return _clean_header_if_needed(df)
+    return _clean_header_if_needed(df, origen=os.path.basename(filepath))
+
+
+def _warn_uncalculated_formulas(filepath: str, sheet_name: str) -> None:
+    """Detecta celdas con fórmula que no traen un valor cacheado (típico de
+    archivos armados/editados por script, o guardados sin recalcular). Con el
+    engine de pandas (data_only=True) esas celdas se leen como None/NaN y el
+    dato se pierde en silencio; aquí solo se avisa por consola para que quien
+    genere el reporte sepa que debe pedir al cliente resguardar el archivo con
+    "Calcular ahora" (F9) antes de guardarlo."""
+    try:
+        import openpyxl
+        wb_formulas = openpyxl.load_workbook(filepath, read_only=True, data_only=False)
+        wb_values = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+        ws_formulas = wb_formulas[sheet_name]
+        ws_values = wb_values[sheet_name]
+        max_row = min(200, ws_formulas.max_row or 1)
+
+        columnas_sin_valor = set()
+        for row_f, row_v in zip(
+            ws_formulas.iter_rows(min_row=1, max_row=max_row),
+            ws_values.iter_rows(min_row=1, max_row=max_row),
+        ):
+            for cell_f, cell_v in zip(row_f, row_v):
+                es_formula = isinstance(cell_f.value, str) and cell_f.value.startswith("=")
+                if es_formula and cell_v.value is None:
+                    columnas_sin_valor.add(cell_f.column_letter)
+
+        wb_formulas.close()
+        wb_values.close()
+
+        if columnas_sin_valor:
+            print(f"[ADVERTENCIA] '{os.path.basename(filepath)}' (hoja '{sheet_name}'): "
+                  f"columnas con fórmulas sin valor calculado (columnas Excel: "
+                  f"{', '.join(sorted(columnas_sin_valor))}). Esas celdas se leerán como vacías/0; "
+                  f"pedir al cliente guardar el archivo abriéndolo en Excel y recalculando (F9) antes de reenviarlo.")
+    except Exception:
+        pass
 
 
 def _load_table(filepath: str) -> pd.DataFrame:
     """Carga un CSV o XLSX con detección automática de encoding y selección inteligente de hoja."""
     if not filepath or not os.path.exists(filepath):
         return pd.DataFrame()
+    origen = os.path.basename(filepath)
     if filepath.lower().endswith(".xlsx") or filepath.lower().endswith(".xls"):
         try:
             import openpyxl
@@ -183,11 +246,12 @@ def _load_table(filepath: str) -> pd.DataFrame:
             wb.close()
             target_sheet = _find_best_excel_sheet(filepath, sheets)
             df = pd.read_excel(filepath, sheet_name=target_sheet)
-            print(f"[INFO] Hoja seleccionada para '{os.path.basename(filepath)}': '{target_sheet}' (de {len(sheets)} hojas: {sheets})")
+            print(f"[INFO] Hoja seleccionada para '{origen}': '{target_sheet}' (de {len(sheets)} hojas: {sheets})")
+            _warn_uncalculated_formulas(filepath, target_sheet)
         except Exception as e:
             print(f"[ADVERTENCIA] Falló selección de hoja ({e}); intentando pd.read_excel por defecto")
             df = pd.read_excel(filepath)
-        return _clean_header_if_needed(df)
+        return _clean_header_if_needed(df, origen=origen)
     else:
         return _load_csv(filepath)
 
@@ -492,6 +556,7 @@ class LocoDataProcessor:
             "Quetetaro": "Queretaro",
             "Cava Sautto": "Guanajuato",
         })
+        df["region_norm"] = df["region_o_estado"].apply(normalize_region)
 
         # 8. Unidades / Botellas
         if "botellas" not in df.columns:
@@ -675,6 +740,15 @@ class LocoDataProcessor:
                     dfp["canal_reporte"] = "Off Trade"
 
             dfp["canal_norm"] = dfp["canal_reporte"].apply(_normalize_canal)
+
+            # Región
+            reg_cols = [c for c in dfp.columns if any(k in c.lower() for k in ["región", "region", "ubicación", "ubicacion", "territorio", "estado"])]
+            if reg_cols:
+                dfp["region_reporte"] = dfp[reg_cols[0]]
+                dfp["region_norm"] = dfp["region_reporte"].apply(normalize_region)
+            else:
+                dfp["region_reporte"] = None
+                dfp["region_norm"] = None
 
             # Año: si no tiene año, asumir año concurrente (self.anio)
             if "anio" in dfp.columns:
@@ -1368,7 +1442,7 @@ class LocoDataProcessor:
         """Retorna el DataFrame enriquecido completo para el dashboard."""
         cols = [
             "semana_str", "fecha", "producto", "canal_norm",
-            "cliente", "region_o_estado", "mes",
+            "cliente", "region_o_estado", "region_norm", "mes",
             "venta_sin_impuestos", "botellas", "cajas_9L",
             "margen_pesos", "margen_pct", "precio_unitario",
             "anio_num", "semana_num",
@@ -1377,7 +1451,7 @@ class LocoDataProcessor:
         df_out = self.df[cols].copy()
         df_out.columns = [
             "semana", "fecha", "producto", "canal",
-            "cliente", "estado", "mes",
+            "cliente", "estado", "region", "mes",
             "venta_sin_iva", "botellas", "cajas_9l",
             "margen_pesos", "margen_pct", "precio_unitario",
             "anio", "semana_num",
