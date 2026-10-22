@@ -34,8 +34,8 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zipArchive = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 
 # Patrones de exclusión
-$excludeFolders = @("datos_reales_cliente", "*output*", ".git", "__pycache__", ".pytest_cache", ".ipynb_checkpoints", ".claude")
-$excludeFiles = @($DestinationZip, "*.zip")
+$excludeFolders = @("datos_reales_cliente", "*output*", "*to_delete*", ".git", "__pycache__", ".pytest_cache", ".ipynb_checkpoints", ".claude")
+$excludeFiles = @($DestinationZip, "*.zip", "*to_delete*")
 
 # Obtener todos los archivos recursivamente
 $allFiles = Get-ChildItem -Path $SourceDir -Recurse -File

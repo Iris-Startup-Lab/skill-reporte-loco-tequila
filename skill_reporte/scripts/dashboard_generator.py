@@ -597,6 +597,37 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     .kpi-card .kpi-delta.pos {{ color: #00B050; }}
     .kpi-card .kpi-delta.neg {{ color: var(--neg); }}
 
+    /* Tarjeta 10: Foco / KPI a poner atención */
+    .kpi-card.kpi-focus {{
+      border-left: 4px solid var(--brand-maroon);
+      background: linear-gradient(180deg, #FFFFFF 0%, #FDF8F8 100%);
+      position: relative;
+    }}
+    .kpi-card.kpi-focus.critico {{
+      border-left-color: var(--neg);
+      background: linear-gradient(180deg, #FFFFFF 0%, #FFF5F5 100%);
+    }}
+    .kpi-card.kpi-focus.alerta {{
+      border-left-color: #D48806;
+      background: linear-gradient(180deg, #FFFFFF 0%, #FFFBF2 100%);
+    }}
+    .kpi-card.kpi-focus.ok {{
+      border-left-color: #00B050;
+      background: linear-gradient(180deg, #FFFFFF 0%, #F4FAF6 100%);
+    }}
+    .kpi-focus-badge {{
+      display: inline-block;
+      font-size: 0.60rem;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }}
+    .kpi-focus-badge.critico {{ background: #FDE8E8; color: var(--neg); }}
+    .kpi-focus-badge.alerta {{ background: #FEF7E8; color: #D48806; }}
+    .kpi-focus-badge.ok {{ background: #EBF8F1; color: #00B050; }}
+
     /* ── Charts grid ── */
     .charts-grid {{
       display: grid;
@@ -922,6 +953,137 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     }}
     .opp-link:hover {{ color: #0d47a1; }}
 
+    /* ── Diagnóstico Ejecutivo de Dimensiones y Alertas ── */
+    .diag-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 14px;
+      margin-top: 4px;
+    }}
+    .diag-card {{
+      background: var(--card-bg);
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      border-left: 4px solid #CBD5E1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.18s, box-shadow 0.18s;
+    }}
+    .diag-card:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+    }}
+    .diag-card.critico {{
+      border-left-color: var(--neg);
+      background: linear-gradient(180deg, #FFFFFF 0%, #FFF9F9 100%);
+    }}
+    .diag-card.alerta {{
+      border-left-color: #D48806;
+      background: linear-gradient(180deg, #FFFFFF 0%, #FFFDF7 100%);
+    }}
+    .diag-card.monitoreo {{
+      border-left-color: #1F3B5C;
+      background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%);
+    }}
+    .diag-card.estable {{
+      border-left-color: #00B050;
+      background: linear-gradient(180deg, #FFFFFF 0%, #F5FBF7 100%);
+    }}
+    .diag-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 8px;
+    }}
+    .diag-dim {{
+      font-size: 0.66rem;
+      font-weight: 700;
+      color: var(--brand-maroon);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }}
+    .diag-badge {{
+      font-size: 0.60rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }}
+    .diag-badge.critico {{ background: #FDE8E8; color: var(--neg); }}
+    .diag-badge.alerta {{ background: #FEF7E8; color: #D48806; }}
+    .diag-badge.monitoreo {{ background: #EBF2FA; color: #1F3B5C; }}
+    .diag-badge.estable {{ background: #EBF8F1; color: #00B050; }}
+    .diag-title {{
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.35;
+      margin-bottom: 5px;
+    }}
+    .diag-sintoma {{
+      font-size: 0.73rem;
+      color: #4A5568;
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }}
+    .diag-impacto {{
+      font-size: 0.70rem;
+      font-weight: 600;
+      color: var(--brand-maroon);
+      margin-bottom: 8px;
+    }}
+    .diag-accion {{
+      font-size: 0.70rem;
+      color: #2D3748;
+      background: rgba(0,0,0,0.02);
+      border-top: 1px dashed #E2E8F0;
+      padding-top: 7px;
+      margin-top: auto;
+      line-height: 1.35;
+    }}
+    .diag-accion strong {{
+      color: var(--brand-maroon);
+      font-weight: 600;
+    }}
+
+    /* ── Tablas de Diagnóstico Ejecutivo ── */
+    .diag-table {{ width: 100%; border-collapse: collapse; font-size: 0.74rem; }}
+    .diag-table thead th {{
+      background: var(--brand-maroon);
+      color: #fff;
+      text-align: left;
+      padding: 10px 14px;
+      font-weight: 600;
+      font-size: 0.72rem;
+      letter-spacing: 0.3px;
+    }}
+    .diag-table tbody td {{
+      padding: 10px 14px;
+      border-bottom: 1px solid #ECECEC;
+      font-size: 0.74rem;
+      vertical-align: middle;
+    }}
+    .diag-table tbody tr:hover {{ background: #FAF5F6; }}
+    .diag-pill {{
+      display: inline-block;
+      font-size: 0.60rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }}
+    .diag-pill.critico {{ background: #FDE8E8; color: var(--neg); }}
+    .diag-pill.alerta {{ background: #FEF7E8; color: #D48806; }}
+    .diag-pill.monitoreo {{ background: #EBF2FA; color: #1F3B5C; }}
+    .diag-pill.ok {{ background: #EBF8F1; color: #00B050; }}
+
     /* ── Footer ── */
     footer {{
       text-align: center;
@@ -1021,6 +1183,7 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
     <div class="main-tabs-row">
       <button class="tab-btn active" data-tab="general" onclick="switchTab('general')">Dashboard General</button>
       <button class="tab-btn" data-tab="comparativo8" onclick="switchTab('comparativo8')">Comparativo 8 Columnas</button>
+      <button class="tab-btn" data-tab="diagnostico" onclick="switchTab('diagnostico')">Diagnóstico Ejecutivo</button>
     </div>
     <div class="subtabs-bar" id="subtabs-general" data-tab="general">
       <span class="subtabs-label">Gráficas:</span>
@@ -1037,6 +1200,14 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       <button class="subtab-link" onclick="jumpToSection('card-comp8-producto', 'comparativo8')">📦 Por Producto</button>
       <button class="subtab-link" onclick="jumpToSection('card-comp8-canal', 'comparativo8')">🏪 Por Canal</button>
       <button class="subtab-link" onclick="jumpToSection('card-comp8-region', 'comparativo8')">🗺️ Por Región</button>
+    </div>
+    <div class="subtabs-bar" id="subtabs-diagnostico" data-tab="diagnostico" style="display: none;">
+      <span class="subtabs-label">Diagnósticos:</span>
+      <button class="subtab-link" onclick="jumpToSection('card-diag-resumen', 'diagnostico')">⚠️ Alertas Principales</button>
+      <button class="subtab-link" onclick="jumpToSection('card-diag-plan', 'diagnostico')">🎯 Plan vs Real</button>
+      <button class="subtab-link" onclick="jumpToSection('card-diag-productos', 'diagnostico')">📦 Productos y Frenazos</button>
+      <button class="subtab-link" onclick="jumpToSection('card-diag-regiones', 'diagnostico')">🗺️ Regiones y Territorio</button>
+      <button class="subtab-link" onclick="jumpToSection('card-diag-clientes', 'diagnostico')">👥 Clientes Clave</button>
     </div>
   </nav>
 
@@ -1277,6 +1448,127 @@ def _build_html(data: dict, logo_svg: str = "") -> str:
       </table>
     </div>
   </div>
+  </main>
+  </section>
+
+  <!-- Pestaña: Diagnóstico Ejecutivo de KPIs y Dimensiones a Poner Atención -->
+  <section class="tab-content" id="tab-diagnostico" hidden>
+  <main>
+    <!-- KPIs (Sticky) repetidos como en las otras pestañas -->
+    <div class="kpi-sticky-container">
+      <div class="kpi-grid" id="kpiGrid_diagnostico"></div>
+    </div>
+
+    <!-- 1. Alertas Principales y Semáforo Directivo -->
+    <div class="chart-card" id="card-diag-resumen" style="margin-bottom:22px;">
+      <div class="chart-title">
+        <div>
+          Resumen Ejecutivo de Focos de Atención y Riesgos
+          <span class="chart-note">Detección algorítmica de anomalías comerciales, caídas bruscas y brechas presupuestales</span>
+        </div>
+      </div>
+      <div class="chart-body" style="padding:16px;">
+        <div class="diag-grid" id="diagGrid"></div>
+      </div>
+    </div>
+
+    <!-- 2. Diagnóstico de Cumplimiento Plan Comercial vs Real -->
+    <div class="table-card" id="card-diag-plan">
+      <div class="table-header">
+        <span>Diagnóstico de Presupuesto: Plan vs Real por Canal</span>
+        <span id="diagPlanSummary" style="font-size:0.75rem;opacity:0.9;"></span>
+      </div>
+      <div class="table-wrapper" style="max-height:none;">
+        <table class="diag-table">
+          <thead>
+            <tr>
+              <th>Canal</th>
+              <th>Venta Real</th>
+              <th>Plan Presupuestado</th>
+              <th>Brecha ($)</th>
+              <th>Cumplimiento (%)</th>
+              <th>Semáforo</th>
+              <th>Diagnóstico / Acción Sugerida</th>
+            </tr>
+          </thead>
+          <tbody id="diagTablePlan"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 3. Diagnóstico de Productos: Detección de Frenazos Súbitos y Caídas -->
+    <div class="table-card" id="card-diag-productos">
+      <div class="table-header">
+        <span>Diagnóstico de Productos (SKUs): Rotación y Detección de Frenazos Súbitos (Drop-Off)</span>
+        <span style="font-size:0.72rem;opacity:0.85;">Compara la venta actual vs el promedio de semanas previas recientes</span>
+      </div>
+      <div class="table-wrapper" style="max-height:none;">
+        <table class="diag-table">
+          <thead>
+            <tr>
+              <th>Producto (SKU)</th>
+              <th>Venta Actual</th>
+              <th>Prom. Semanas Previas</th>
+              <th>Variación</th>
+              <th>Estado / Anomalía</th>
+              <th>Impacto Estimado</th>
+              <th>Diagnóstico y Causa Probable</th>
+            </tr>
+          </thead>
+          <tbody id="diagTableProductos"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 4. Diagnóstico Regional / Estados: Detección de Caídas en Plazas Clave -->
+    <div class="table-card" id="card-diag-regiones">
+      <div class="table-header">
+        <span>Diagnóstico Territorial: Desempeño por Región y Estado</span>
+        <span style="font-size:0.72rem;opacity:0.85;">Monitoreo de contracciones severas WoW y YoY</span>
+      </div>
+      <div class="table-wrapper" style="max-height:none;">
+        <table class="diag-table">
+          <thead>
+            <tr>
+              <th>Región / Territorio</th>
+              <th>Venta Actual</th>
+              <th>Semana Anterior</th>
+              <th>Var WoW %</th>
+              <th>Año Anterior</th>
+              <th>Var YoY %</th>
+              <th>Semáforo</th>
+              <th>Diagnóstico Territorial</th>
+            </tr>
+          </thead>
+          <tbody id="diagTableRegiones"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 5. Diagnóstico de Clientes Clave e Inactividad -->
+    <div class="table-card" id="card-diag-clientes">
+      <div class="table-header">
+        <span>Diagnóstico de Cuentas Clave: Detección de Inactividad y Desaceleración Comercial</span>
+        <span style="font-size:0.72rem;opacity:0.85;">Cuentas con compras previas sin pedidos en el periodo</span>
+      </div>
+      <div class="table-wrapper" style="max-height:none;">
+        <table class="diag-table">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Venta Actual</th>
+              <th>Compra Sem. Anterior</th>
+              <th>Variación</th>
+              <th>Condición de Cuenta</th>
+              <th>Facturación en Pausa</th>
+              <th>Recomendación Comercial</th>
+            </tr>
+          </thead>
+          <tbody id="diagTableClientes"></tbody>
+        </table>
+      </div>
+    </div>
+
   </main>
   </section>
   </div> <!-- /content-wrap -->
@@ -1924,6 +2216,7 @@ function updateDashboard() {{
   // a pedido explícito del cliente (mismas tarjetas al inicio de cada pestaña).
   renderKPIsDynamic(filteredTabla, 'kpiGrid');
   renderKPIsDynamic(filteredTabla, 'kpiGrid_comparativo8');
+  renderKPIsDynamic(filteredTabla, 'kpiGrid_diagnostico');
 
   // 2. Redibujar Gráficas dinámicas
   renderChartsDynamic(filteredTabla);
@@ -1933,6 +2226,9 @@ function updateDashboard() {{
 
   // 4. Renderizar Comparativo 8 Columnas dinámico
   renderComparativo8Col();
+
+  // 5. Diagnóstico Ejecutivo de Dimensiones y Alertas
+  renderDiagnosticoAlertas();
 }}
 
 // ── Recálculo Dinámico de KPIs ────────────────────────────────────────────
@@ -2034,38 +2330,162 @@ function renderKPIsDynamic(records, targetId = 'kpiGrid') {{
   const fmtDeltaPct = (pct) => (pct === null || pct === undefined || Number.isNaN(pct))
     ? 'N/D' : `${{pct >= 0 ? '+' : ''}}${{pct.toFixed(1)}}%`;
 
+  // ── Tarjeta 10: "KPI a Poner Atención" (Diagnóstico Dinámico de Severidad) ──
+  const focusIssues = [];
+
+  // 1. Brecha severa vs Plan (si hay presupuesto)
+  if (totalPlan > 0 && vsPlanPct < -5.0) {{
+    focusIssues.push({{
+      label: 'Venta vs Plan',
+      valDisplay: `${{vsPlanPct >= 0 ? '+' : ''}}${{vsPlanPct.toFixed(1)}}%`,
+      delta: vsPlanPct,
+      detail: `Rezago de ${{fmtMiles(totalPlan - totalVentas)}}`,
+      severity: Math.abs(vsPlanPct) * 1.5,
+      level: vsPlanPct < -25 ? 'critico' : 'alerta',
+      badge: vsPlanPct < -25 ? '🔴 Desvío Crítico' : '🟡 En Alerta'
+    }});
+  }}
+
+  // 2. Caída WoW severa
+  if (wowPct !== null && wowPct < -10.0) {{
+    focusIssues.push({{
+      label: 'Caída WoW',
+      valDisplay: `${{wowPct >= 0 ? '+' : ''}}${{wowPct.toFixed(1)}}%`,
+      delta: wowPct,
+      detail: 'vs Semana Anterior',
+      severity: Math.abs(wowPct) * 1.2,
+      level: wowPct < -30 ? 'critico' : 'alerta',
+      badge: wowPct < -30 ? '🔴 Caída Severa' : '🟡 Caída WoW'
+    }});
+  }}
+
+  // 3. Caída YoY severa
+  if (yoyPct !== null && yoyPct < -10.0) {{
+    focusIssues.push({{
+      label: 'Caída YoY',
+      valDisplay: `${{yoyPct >= 0 ? '+' : ''}}${{yoyPct.toFixed(1)}}%`,
+      delta: yoyPct,
+      detail: 'vs Mismo Periodo Año Ant.',
+      severity: Math.abs(yoyPct) * 1.0,
+      level: yoyPct < -25 ? 'critico' : 'alerta',
+      badge: yoyPct < -25 ? '🔴 Caída Anual' : '🟡 Caída YoY'
+    }});
+  }}
+
+  // 4. Rezagado YTD vs año anterior
+  if (ytdPct !== null && ytdPct < -5.0) {{
+    focusIssues.push({{
+      label: 'Rezagado YTD',
+      valDisplay: `${{ytdPct >= 0 ? '+' : ''}}${{ytdPct.toFixed(1)}}%`,
+      delta: ytdPct,
+      detail: 'Acumulado vs Año Anterior',
+      severity: Math.abs(ytdPct) * 1.3,
+      level: ytdPct < -15 ? 'critico' : 'alerta',
+      badge: ytdPct < -15 ? '🔴 YTD en Riesgo' : '🟡 Desaceleración'
+    }});
+  }}
+
+  // 5. Erosión de Margen (umbral de referencia 65%)
+  if (totalVentas > 0 && margenPct < 65.0) {{
+    const brechaMargen = 65.0 - margenPct;
+    focusIssues.push({{
+      label: 'Margen Bajo',
+      valDisplay: `${{margenPct.toFixed(1)}}%`,
+      delta: -brechaMargen,
+      detail: 'Meta ref. 65.0%',
+      severity: brechaMargen * 2.2,
+      level: margenPct < 55.0 ? 'critico' : 'alerta',
+      badge: margenPct < 55.0 ? '🔴 Margen Crítico' : '🟡 Margen Ajustado'
+    }});
+  }}
+
+  focusIssues.sort((a, b) => b.severity - a.severity);
+
+  let focusCard;
+  if (focusIssues.length > 0) {{
+    const top = focusIssues[0];
+    focusCard = {{
+      label: 'KPI a Poner Atención',
+      value: top.label,
+      delta: top.delta,
+      deltaLabel: top.detail,
+      isFocus: true,
+      focusLevel: top.level,
+      focusBadge: top.badge,
+      valDisplay: top.valDisplay
+    }};
+  }} else {{
+    focusCard = {{
+      label: 'KPI a Poner Atención',
+      value: 'Objetivos en Meta',
+      delta: null,
+      deltaLabel: 'Sin desvíos críticos',
+      isFocus: true,
+      focusLevel: 'ok',
+      focusBadge: '✅ Estable',
+      valDisplay: 'Saludable'
+    }};
+  }}
+
   const grid = document.getElementById(targetId);
   if (!grid) return;
-  // Tarjetas monetarias "grandes" (Ventas Netas, Plan Est., YTD Acumuladas)
-  // se muestran en miles vía fmtMiles (ej. "$1,234k") a pedido del cliente.
-  // Los porcentajes NO cambian de formato. El Ticket Promedio usa fmtCur
-  // (moneda completa sin decimales, ej. "$2,603") porque es un valor por
-  // transacción, no un monto agregado "grande".
+
+  // Nuevo orden estricto de tarjetas:
+  // 1. Ventas Totales- YTD Ventas acumuladas
+  // 2. Ventas Netas
+  // 3. YTD vs año anterior
+  // 4. Plan est. ($)
+  // 5. WOW- vs semana anterior
+  // 6. YOY- vs misma semana ant
+  // 7. Cajas
+  // 8. Margen
+  // 9. Ticket Promedio
+  // 10. KPI a poner atención (extra)
+  // (La tarjeta "Registros" queda eliminada)
   const cards = [
+    {{ label: 'Ventas Totales — YTD Acumuladas', value: fmtMiles(ytdVal), delta: null }},
+    {{ label: 'Ventas Netas ($)',                 value: fmtMiles(totalVentas), delta: vsPlanPct, deltaLabel: 'vs Plan' }},
+    {{ label: 'YTD vs Año Anterior (%)',          value: fmtDeltaPct(ytdPct),  delta: ytdPct, deltaLabel: '' }},
+    {{ label: 'Plan Est. ($)',                    value: fmtMiles(totalPlan),   delta: null }},
     {{ label: 'WoW — vs Semana Anterior',        value: fmtDeltaPct(wowPct),  delta: wowPct, deltaLabel: '' }},
     {{ label: 'YoY — vs Misma Sem. Año Ant.',    value: fmtDeltaPct(yoyPct),  delta: yoyPct, deltaLabel: '' }},
-    {{ label: 'YTD — vs Año Anterior (%)',        value: fmtDeltaPct(ytdPct),  delta: ytdPct, deltaLabel: '' }},
-    {{ label: `YTD — Ventas Acumuladas`,          value: fmtMiles(ytdVal),                                       delta: null }},
-    {{ label: 'Ventas Netas ($)',                 value: fmtMiles(totalVentas),  delta: vsPlanPct, deltaLabel: 'vs Plan' }},
-    {{ label: 'Plan Est. ($)',                    value: fmtMiles(totalPlan),    delta: null }},
     {{ label: '# CAJAS DE 9L',                    value: totalCajas9L.toFixed(1), delta: null }},
     {{ label: 'Margen %',                         value: `${{margenPct.toFixed(1)}}%`, delta: null }},
     {{ label: 'Ticket Promedio',                  value: fmtCur(ticket),        delta: null }},
-    {{ label: 'Registros',                        value: records.length.toLocaleString(), delta: null }},
+    focusCard,
   ];
 
-  grid.innerHTML = cards.map(c => `
-    <div class="kpi-card">
-      <div class="kpi-label">${{c.label}}</div>
-      <div class="kpi-value">${{c.value}}</div>
-      ${{c.delta !== null
-        ? `<div class="kpi-delta ${{c.delta >= 0 ? 'pos' : 'neg'}}">
-             ${{c.delta >= 0 ? '▲' : '▼'}} ${{Math.abs(c.delta).toFixed(1)}}% ${{c.deltaLabel || ''}}
-           </div>`
-        : '<div class="kpi-delta">&nbsp;</div>'
-      }}
-    </div>
-  `).join('');
+  grid.innerHTML = cards.map(c => {{
+    if (c.isFocus) {{
+      return `
+        <div class="kpi-card kpi-focus ${{c.focusLevel}}">
+          <div class="kpi-label">${{c.label}}</div>
+          <div class="kpi-value" style="font-size:1.15rem; line-height:1.2; margin: 4px 0;">
+            ${{c.value}}
+            <span style="display:block; font-size:0.82rem; font-weight:600; color:${{c.focusLevel === 'ok' ? '#00B050' : (c.focusLevel === 'critico' ? 'var(--neg)' : '#D48806')}};">
+              ${{c.valDisplay}}
+            </span>
+          </div>
+          <div class="kpi-delta" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>${{c.deltaLabel || ''}}</span>
+            <span class="kpi-focus-badge ${{c.focusLevel}}">${{c.focusBadge}}</span>
+          </div>
+        </div>
+      `;
+    }}
+    return `
+      <div class="kpi-card">
+        <div class="kpi-label">${{c.label}}</div>
+        <div class="kpi-value">${{c.value}}</div>
+        ${{c.delta !== null
+          ? `<div class="kpi-delta ${{c.delta >= 0 ? 'pos' : 'neg'}}">
+               ${{c.delta >= 0 ? '▲' : '▼'}} ${{Math.abs(c.delta).toFixed(1)}}% ${{c.deltaLabel || ''}}
+             </div>`
+          : '<div class="kpi-delta">&nbsp;</div>'
+        }}
+      </div>
+    `;
+  }}).join('');
 }}
 
 
@@ -2505,6 +2925,594 @@ function prevPage() {{ if (page > 1) {{ page--; renderTable(filteredTabla); }} }
 function nextPage() {{
   const max = Math.ceil(filteredTabla.length / PAGE_SIZE);
   if (page < max) {{ page++; renderTable(filteredTabla); }}
+}}
+
+// ── Diagnóstico Ejecutivo de Dimensiones y Alertas ────────────────────────
+// Escapa texto de datos (clientes, productos, regiones) antes de insertarlo en innerHTML.
+function escHtml(s) {{
+  return String(s ?? '').replace(/[&<>"']/g, ch => ({{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }}[ch]));
+}}
+
+// Contexto común del diagnóstico: el periodo analizado es SIEMPRE una semana
+// (la seleccionada, o la semana base del reporte si el filtro está en "Todas"),
+// y las semanas de comparación reciben los mismos filtros de dimensión que la
+// semana actual para comparar manzanas con manzanas.
+function getDiagContext() {{
+  const anioVal    = document.getElementById('fAnio').value;
+  const semanaVal  = document.getElementById('fSemana').value;
+  const prodVal    = document.getElementById('fProducto').value;
+  const canalVal   = document.getElementById('fCanal').value;
+  const estadoVal  = document.getElementById('fEstado').value;
+  const clienteVal = document.getElementById('fCliente').value;
+  const compVal    = document.getElementById('fComparablePlan').value;
+
+  const targetYear = anioVal !== 'all' ? Number(anioVal) : DATA.meta.anio;
+  const targetWeek = semanaVal !== 'all' ? Number(semanaVal.replace('W','')) : DATA.meta.semana;
+  const prevW1 = targetWeek > 1 ? targetWeek - 1 : 52;
+  const prevY1 = targetWeek > 1 ? targetYear : targetYear - 1;
+  const prevW2 = prevW1 > 1 ? prevW1 - 1 : 52;
+  const prevY2 = prevW1 > 1 ? prevY1 : prevY1 - 1;
+
+  const matches = (r) => {{
+    if (prodVal    !== 'all' && r.producto_display !== prodVal) return false;
+    if (canalVal   !== 'all' && r.canal !== canalVal) return false;
+    if (estadoVal  !== 'all' && r.estado !== estadoVal) return false;
+    if (clienteVal !== 'all' && r.cliente !== clienteVal) return false;
+    if (compVal === 'comparables' && !r.comparable_plan) return false;
+    if (compVal === 'no_comparables' && r.comparable_plan) return false;
+    return true;
+  }};
+  const weekRecs = (y, w) => DATA.tabla.filter(r => r.anio === y && r.semana_num === w && matches(r));
+
+  // El plan de origen no trae estado ni cliente: con filtro de Cliente o en
+  // "No comparables" no aplica (mismo criterio que el Comparativo 8 Columnas).
+  const planApplies = (clienteVal === 'all' && compVal !== 'no_comparables');
+  // Con filtro de Estado, el plan se acota a la(s) región(es) de ese estado
+  // cuando el presupuesto trae desglose regional (`p.r`).
+  const estadoRegs = estadoVal !== 'all'
+    ? new Set(DATA.tabla.filter(r => r.estado === estadoVal).map(r => r.region))
+    : null;
+  const planRows = (planApplies && Array.isArray(DATA.plan_detail))
+    ? DATA.plan_detail.filter(p => {{
+        const pYear = p.y || Number((p.k || '').split('-W')[0]);
+        const pWeek = p.w || Number((p.k || '').split('-W')[1]);
+        if (pYear !== targetYear || pWeek !== targetWeek) return false;
+        if (prodVal  !== 'all' && p.p !== prodVal) return false;
+        if (canalVal !== 'all' && p.c !== canalVal) return false;
+        if (estadoRegs && p.r && !estadoRegs.has(p.r)) return false;
+        return true;
+      }})
+    : [];
+
+  return {{
+    targetYear, targetWeek, prevY1, prevW1, prevY2, prevW2, planApplies, planRows,
+    cur:   weekRecs(targetYear, targetWeek),
+    prev1: weekRecs(prevY1, prevW1),
+    prev2: weekRecs(prevY2, prevW2),
+    ly:    weekRecs(targetYear - 1, targetWeek),
+  }};
+}}
+
+function renderDiagnosticoAlertas() {{
+  const container = document.getElementById('diagGrid');
+  if (!container) return;
+
+  const ctx = getDiagContext();
+  const {{ targetYear, targetWeek, prevY1, prevW1 }} = ctx;
+  const records = ctx.cur;
+  const emptyMsg = `🔍 Sin datos para los filtros seleccionados en la semana ${{targetWeek}} de ${{targetYear}}.`;
+
+  if (records.length === 0 && ctx.prev1.length === 0 && ctx.prev2.length === 0) {{
+    container.innerHTML = `
+      <div style="grid-column: 1 / -1; padding: 18px; text-align: center; color: var(--sub); font-size: 0.78rem; background: #F8F9FA; border-radius: 8px;">
+        ${{emptyMsg}} Ajusta o limpia los filtros en el panel lateral para visualizar el diagnóstico.
+      </div>
+    `;
+    ['diagTablePlan', 'diagTableProductos', 'diagTableRegiones', 'diagTableClientes'].forEach(id => {{
+      const tb = document.getElementById(id);
+      if (tb) tb.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--sub);">${{emptyMsg}}</td></tr>`;
+    }});
+    const summaryEl = document.getElementById('diagPlanSummary');
+    if (summaryEl) summaryEl.textContent = '';
+    return;
+  }}
+
+  const diagItems = [];
+
+  // ── A. Diagnóstico de Cumplimiento de Plan Comercial ──────────
+  const totalPlan = ctx.planRows.reduce((s, p) => s + (p.v || 0), 0);
+  const totalVentas = records.reduce((s, r) => s + (r.venta_sin_iva || 0), 0);
+
+  if (totalPlan > 0) {{
+    const diffPlan = totalVentas - totalPlan;
+    const cumplPct = (totalVentas / totalPlan * 100);
+    if (cumplPct < 75.0) {{
+      diagItems.push({{
+        nivel: 'critico',
+        badge: '🔴 Brecha Crítica',
+        dimension: 'Plan Comercial vs Real',
+        titulo: `Cumplimiento de Plan en ${{cumplPct.toFixed(1)}}% (-$${{Math.round(Math.abs(diffPlan)/1000).toLocaleString('es-MX')}}k)`,
+        sintoma: `Las ventas actuales (${{fmtMiles(totalVentas)}}) presentan un rezago severo frente a la meta presupuestada (${{fmtMiles(totalPlan)}}).`,
+        impacto: `Déficit comercial de ${{fmtCur(Math.abs(diffPlan))}} MXN en la selección actual.`,
+        accion: 'Convocar comité comercial para revisar pipeline de colocación y reprogramación de pedidos.'
+      }});
+    }} else if (cumplPct < 90.0) {{
+      diagItems.push({{
+        nivel: 'alerta',
+        badge: '🟡 En Riesgo',
+        dimension: 'Plan Comercial vs Real',
+        titulo: `Cumplimiento de Plan al ${{cumplPct.toFixed(1)}}% (-$${{Math.round(Math.abs(diffPlan)/1000).toLocaleString('es-MX')}}k)`,
+        sintoma: `Brecha moderada contra el presupuesto estimado (${{fmtMiles(totalPlan)}}).`,
+        impacto: `Faltante de ${{fmtCur(Math.abs(diffPlan))}} MXN para alcanzar el 100% de la cuota.`,
+        accion: 'Acelerar gestiones de entrega y facturación en canales mayoristas.'
+      }});
+    }}
+  }}
+
+  // ── B. Diagnóstico de Productos: Frenazos Súbitos y Caídas Severas ──
+  // Agrupar ventas del periodo filtrado por producto
+  const prodCur = {{}};
+  records.forEach(r => {{
+    const p = r.producto_display || r.producto;
+    prodCur[p] = (prodCur[p] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  // Semanas previas recientes (mismos filtros) para detectar frenazos súbitos
+  const recsPrevRecent = ctx.prev1.concat(ctx.prev2);
+  const prodPrevRecent = {{}};
+  recsPrevRecent.forEach(r => {{
+    const p = r.producto_display || r.producto;
+    prodPrevRecent[p] = (prodPrevRecent[p] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  // Identificar productos con drop-off a cero o caída > -45%
+  const dropOffs = [];
+  Object.keys(prodPrevRecent).forEach(p => {{
+    const vPrev = prodPrevRecent[p] / 2; // promedio de las 2 semanas previas
+    const vCur = prodCur[p] || 0;
+    if (vPrev > 20000) {{ // Umbral de relevancia económica
+      if (vCur === 0) {{
+        dropOffs.push({{
+          producto: p,
+          tipo: 'cero',
+          vPrev,
+          vCur,
+          caidaPct: -100,
+          perdida: vPrev
+        }});
+      }} else {{
+        const caida = ((vCur - vPrev) / vPrev * 100);
+        if (caida < -45.0) {{
+          dropOffs.push({{
+            producto: p,
+            tipo: 'fuerte',
+            vPrev,
+            vCur,
+            caidaPct: caida,
+            perdida: vPrev - vCur
+          }});
+        }}
+      }}
+    }}
+  }});
+
+  dropOffs.sort((a, b) => b.perdida - a.perdida);
+  if (dropOffs.length > 0) {{
+    const d = dropOffs[0];
+    const isZero = d.tipo === 'cero';
+    diagItems.push({{
+      nivel: isZero ? 'critico' : 'alerta',
+      badge: isZero ? '🔴 Frenazo Súbito' : '🟡 Caída Brusca',
+      dimension: `Producto · ${{escHtml(d.producto)}}`,
+      titulo: isZero
+        ? `Sin ventas en el periodo (promediaba ${{fmtMiles(d.vPrev)}}/sem)`
+        : `Caída de ${{Math.abs(d.caidaPct).toFixed(1)}}% vs promedio reciente`,
+      sintoma: isZero
+        ? `El producto ${{escHtml(d.producto)}} no registró transacciones tras generar ${{fmtMiles(d.vPrev * 2)}} en semanas previas.`
+        : `Las ventas cayeron a ${{fmtMiles(d.vCur)}} frente a ${{fmtMiles(d.vPrev)}} promedio en semanas anteriores.`,
+      impacto: `Desaceleración estimada de ${{fmtCur(d.perdida)}} MXN no facturados.`,
+      accion: 'Verificar inventario disponible en almacén central y confirmar si existe agotamiento o quiebre de stock en anaquel.'
+    }});
+  }}
+
+  // ── C. Diagnóstico Regional / Estados ──────────────────────────
+  const regCur = {{}};
+  records.forEach(r => {{
+    const reg = r.region || 'Otros';
+    regCur[reg] = (regCur[reg] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const recsPrevWeek = ctx.prev1;
+  const regPrev = {{}};
+  recsPrevWeek.forEach(r => {{
+    const reg = r.region || 'Otros';
+    regPrev[reg] = (regPrev[reg] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const regAlerts = [];
+  Object.keys(regPrev).forEach(reg => {{
+    if (reg === 'Otros') return;
+    const vp = regPrev[reg];
+    const vc = regCur[reg] || 0;
+    if (vp > 30000) {{
+      const varPct = ((vc - vp) / vp * 100);
+      if (varPct < -30.0) {{
+        regAlerts.push({{
+          region: reg,
+          vp,
+          vc,
+          varPct,
+          perdida: vp - vc
+        }});
+      }}
+    }}
+  }});
+
+  regAlerts.sort((a, b) => b.perdida - a.perdida);
+  if (regAlerts.length > 0) {{
+    const rAlert = regAlerts[0];
+    diagItems.push({{
+      nivel: rAlert.varPct < -50 ? 'critico' : 'alerta',
+      badge: rAlert.varPct < -50 ? '🔴 Contracción Regional' : '🟡 Descenso Regional',
+      dimension: `Región · ${{escHtml(rAlert.region)}}`,
+      titulo: `Caída de ${{Math.abs(rAlert.varPct).toFixed(1)}}% WoW (-$${{Math.round(rAlert.perdida/1000).toLocaleString('es-MX')}}k)`,
+      sintoma: `La plaza ${{escHtml(rAlert.region)}} facturó ${{fmtMiles(rAlert.vc)}} frente a ${{fmtMiles(rAlert.vp)}} de la semana previa.`,
+      impacto: `Contracción de ${{fmtCur(rAlert.perdida)}} MXN en la región.`,
+      accion: 'Contactar a los ejecutivos de cuenta regional para evaluar sell-out y rotación en centros de consumo.'
+    }});
+  }}
+
+  // ── D. Diagnóstico de Rentabilidad y Margen ───────────────────
+  const totalMargenPesos = records.reduce((s, r) => s + (r.margen_pesos || 0), 0);
+  const margenPct = totalVentas > 0 ? (totalMargenPesos / totalVentas * 100) : 0;
+  // Mismos umbrales que la tarjeta 10 (alerta < 65%, crítico < 55%)
+  if (totalVentas > 0 && margenPct < 65.0) {{
+    diagItems.push({{
+      nivel: margenPct < 55.0 ? 'critico' : 'alerta',
+      badge: margenPct < 55.0 ? '🔴 Margen Comprometido' : '🟡 Margen Reducido',
+      dimension: 'Rentabilidad / Margen',
+      titulo: `Margen promedio del ${{margenPct.toFixed(1)}}% (Inferior al objetivo 65%)`,
+      sintoma: 'La mezcla de productos o condiciones comerciales del periodo redujo el margen bruto promedio.',
+      impacto: `Margen bruto generado: ${{fmtCur(totalMargenPesos)}} MXN.`,
+      accion: 'Auditar descuentos y promociones aplicadas y priorizar la colocación de SKUs de alto margen (Áureo / 269).'
+    }});
+  }}
+
+  // ── E. Diagnóstico de Clientes Clave ──────────────────────────
+  const recsPrevCli = ctx.prev1.filter(r => r.cliente && r.cliente !== '—');
+  const cliPrev = {{}};
+  recsPrevCli.forEach(r => {{
+    cliPrev[r.cliente] = (cliPrev[r.cliente] || 0) + (r.venta_sin_iva || 0);
+  }});
+  const cliCur = {{}};
+  records.forEach(r => {{
+    if (r.cliente && r.cliente !== '—') {{
+      cliCur[r.cliente] = (cliCur[r.cliente] || 0) + (r.venta_sin_iva || 0);
+    }}
+  }});
+
+  const cliInactive = [];
+  Object.keys(cliPrev).forEach(cl => {{
+    const vp = cliPrev[cl];
+    const vc = cliCur[cl] || 0;
+    if (vp > 40000 && vc === 0) {{
+      cliInactive.push({{ cliente: cl, vp, perdida: vp }});
+    }}
+  }});
+
+  cliInactive.sort((a, b) => b.perdida - a.perdida);
+  if (cliInactive.length > 0) {{
+    const cTop = cliInactive[0];
+    diagItems.push({{
+      nivel: 'alerta',
+      badge: '🟡 Pausa de Compra',
+      dimension: `Cliente Clave · ${{escHtml(cTop.cliente)}}`,
+      titulo: `Sin compras registradas tras facturar ${{fmtMiles(cTop.vp)}} la semana anterior`,
+      sintoma: `La cuenta ${{escHtml(cTop.cliente)}} no generó órdenes en el periodo filtrado.`,
+      impacto: `Facturación en pausa: ${{fmtCur(cTop.perdida)}} MXN.`,
+      accion: 'Ejecutar llamada comercial de seguimiento con el comprador de la cuenta para validar fecha de reposición.'
+    }});
+  }}
+
+  // Si no se detectaron anomalías severas, mostrar estado saludable
+  if (diagItems.length === 0) {{
+    diagItems.push({{
+      nivel: 'estable',
+      badge: '✅ Operación en Meta',
+      dimension: 'Balance General de Operación',
+      titulo: 'Sin anomalías críticas detectadas',
+      sintoma: 'Las variaciones de ventas, márgenes y rotación por SKU y región se encuentran dentro de las tolerancias normales.',
+      impacto: 'Desempeño comercial estable sin alertas rojas inmediatas.',
+      accion: 'Mantener seguimiento al plan semanal y monitorear la colocación continua en puntos de venta.'
+    }});
+  }}
+
+  container.innerHTML = diagItems.map(item => `
+    <div class="diag-card ${{item.nivel}}">
+      <div>
+        <div class="diag-head">
+          <span class="diag-dim">${{item.dimension}}</span>
+          <span class="diag-badge ${{item.nivel}}">${{item.badge}}</span>
+        </div>
+        <div class="diag-title">${{item.titulo}}</div>
+        <div class="diag-sintoma">${{item.sintoma}}</div>
+        <div class="diag-impacto">💼 Impacto: ${{item.impacto}}</div>
+      </div>
+      <div class="diag-accion">
+        <strong>💡 Acción sugerida:</strong> ${{item.accion}}
+      </div>
+    </div>
+  `).join('');
+
+  // Rellenar las 4 tablas detalladas de la pestaña
+  renderDiagTablePlan(ctx);
+  renderDiagTableProductos(records, prodPrevRecent);
+  renderDiagTableRegiones(ctx);
+  renderDiagTableClientes(ctx);
+}}
+
+// ── Tablas Analíticas de la Pestaña Diagnóstico Ejecutivo ──────────────────
+function renderDiagTablePlan(ctx) {{
+  const tbody = document.getElementById('diagTablePlan');
+  const summaryEl = document.getElementById('diagPlanSummary');
+  if (!tbody) return;
+
+  const canalVal = document.getElementById('fCanal').value;
+  const canales = canalVal !== 'all'
+    ? [canalVal]
+    : (DATA.filtros.canales || ['On Trade', 'Off Trade', 'Exportación', 'Venta Directa']);
+  const realPorCanal = {{}};
+  ctx.cur.forEach(r => {{
+    realPorCanal[r.canal] = (realPorCanal[r.canal] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  // Plan por canal de la semana analizada (ya filtrado por Producto/Canal);
+  // el monto viene en `v` (`p` es el nombre del producto).
+  const planPorCanal = {{}};
+  let totalPlanGlobal = 0;
+  ctx.planRows.forEach(p => {{
+    const c = p.c || 'Total';
+    planPorCanal[c] = (planPorCanal[c] || 0) + (p.v || 0);
+    totalPlanGlobal += (p.v || 0);
+  }});
+
+  let totalReal = 0;
+  const rows = canales.map(canal => {{
+    const real = realPorCanal[canal] || 0;
+    totalReal += real;
+    const plan = planPorCanal[canal] || 0;
+    const brecha = plan > 0 ? real - plan : null;
+    const cumpl = plan > 0 ? (real / plan * 100) : null;
+
+    let pillCls = 'monitoreo', pillText = 'Sin Plan Asignado', diag = 'Canal sin cuota presupuestal desglosada.';
+    if (plan > 0) {{
+      if (cumpl < 75) {{
+        pillCls = 'critico'; pillText = '🔴 Crítico';
+        diag = `Rezago de ${{fmtMiles(Math.abs(brecha))}}. Requiere impulso urgente de sell-in y revisión de pedidos pendientes.`;
+      }} else if (cumpl < 90) {{
+        pillCls = 'alerta'; pillText = '🟡 En Alerta';
+        diag = `Brecha moderada de ${{fmtMiles(Math.abs(brecha))}}. Facturación cercana al umbral de seguridad.`;
+      }} else {{
+        pillCls = 'ok'; pillText = '✅ En Meta';
+        diag = `Cumplimiento favorable de cuota (+${{cumpl.toFixed(1)}}%).`;
+      }}
+    }} else if (!ctx.planApplies) {{
+      pillText = 'Plan No Aplica';
+      diag = 'El plan no se desglosa por cliente ni aplica a ventas no comparables.';
+    }} else if (real > 0) {{
+      pillCls = 'ok'; pillText = '⭐ Aporte Adicional';
+      diag = `Ventas no presupuestadas sumando ${{fmtMiles(real)}} al margen.`;
+    }}
+
+    return `
+      <tr>
+        <td><strong>${{escHtml(canal)}}</strong></td>
+        <td>${{fmtCur(real)}}</td>
+        <td>${{plan > 0 ? fmtCur(plan) : '—'}}</td>
+        <td class="${{brecha !== null && brecha < 0 ? 'neg-val' : ''}}">${{brecha !== null ? fmtCur(brecha) : '—'}}</td>
+        <td><strong>${{cumpl !== null ? cumpl.toFixed(1) + '%' : '—'}}</strong></td>
+        <td><span class="diag-pill ${{pillCls}}">${{pillText}}</span></td>
+        <td style="font-size:0.71rem; color:#4A5568;">${{diag}}</td>
+      </tr>
+    `;
+  }}).join('');
+
+  tbody.innerHTML = rows;
+  if (summaryEl) {{
+    const cumplGlobal = totalPlanGlobal > 0 ? (totalReal / totalPlanGlobal * 100) : null;
+    summaryEl.textContent = cumplGlobal !== null
+      ? `Cumplimiento Global: ${{cumplGlobal.toFixed(1)}}% · Meta: ${{fmtMiles(totalPlanGlobal)}} · Real: ${{fmtMiles(totalReal)}}`
+      : `Venta Real Acumulada: ${{fmtMiles(totalReal)}}`;
+  }}
+}}
+
+function renderDiagTableProductos(records, prodPrevRecent) {{
+  const tbody = document.getElementById('diagTableProductos');
+  if (!tbody) return;
+
+  const prodVal = document.getElementById('fProducto').value;
+  const productos = prodVal !== 'all' ? [prodVal] : (DATA.filtros.productos || []);
+  const prodCur = {{}};
+  records.forEach(r => {{
+    const p = r.producto_display || r.producto;
+    prodCur[p] = (prodCur[p] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const rowsData = productos.map(p => {{
+    const vCur = prodCur[p] || 0;
+    const vPrev = (prodPrevRecent[p] || 0) / 2;
+    const varPct = vPrev > 0 ? ((vCur - vPrev) / vPrev * 100) : (vCur > 0 ? 100 : 0);
+
+    let statusCls = 'ok', statusText = 'Normal', impacto = '—', diag = 'Desempeño dentro del rango habitual.';
+    if (vPrev > 20000 && vCur === 0) {{
+      statusCls = 'critico';
+      statusText = '🔴 Frenazo Súbito';
+      impacto = `-${{fmtCur(vPrev)}}`;
+      diag = 'Dejó de venderse bruscamente en el periodo tras demanda regular. Auditar existencia física y quiebre de stock.';
+    }} else if (vPrev > 20000 && varPct < -45) {{
+      statusCls = 'alerta';
+      statusText = '🟡 Caída Brusca';
+      impacto = `-${{fmtCur(vPrev - vCur)}}`;
+      diag = `Contracción de ${{Math.abs(varPct).toFixed(1)}}% vs promedio reciente. Verificar rotación con distribuidores.`;
+    }} else if (vCur > 0 && vPrev === 0) {{
+      statusCls = 'monitoreo';
+      statusText = '🔵 Reactivación';
+      impacto = `+${{fmtCur(vCur)}}`;
+      diag = 'Reanudación de ventas sin registro en semanas previas.';
+    }} else if (vCur === 0 && vPrev === 0) {{
+      statusCls = 'monitoreo';
+      statusText = '⚪ Sin Movimiento';
+      impacto = '$0';
+      diag = 'Sin desplazamiento reciente en los filtros seleccionados.';
+    }} else if (varPct >= 0) {{
+      statusCls = 'ok';
+      statusText = '✅ En Crecimiento';
+      impacto = `+${{fmtCur(vCur - vPrev)}}`;
+      diag = `Tracción positiva (+${{varPct.toFixed(1)}}% vs semanas previas).`;
+    }}
+
+    return {{ p, vCur, vPrev, varPct, statusCls, statusText, impacto, diag, priority: statusCls === 'critico' ? 3 : (statusCls === 'alerta' ? 2 : 1) }};
+  }});
+
+  // Ordenar priorizando focos críticos primero
+  rowsData.sort((a, b) => b.priority - a.priority || b.vPrev - a.vPrev);
+
+  tbody.innerHTML = rowsData.map(r => `
+    <tr>
+      <td><strong>${{escHtml(r.p)}}</strong></td>
+      <td>${{fmtCur(r.vCur)}}</td>
+      <td>${{fmtCur(r.vPrev)}}</td>
+      <td class="${{r.varPct < 0 ? 'neg-val' : ''}}"><strong>${{r.vPrev > 0 ? (r.varPct >= 0 ? '+' : '') + r.varPct.toFixed(1) + '%' : '—'}}</strong></td>
+      <td><span class="diag-pill ${{r.statusCls}}">${{r.statusText}}</span></td>
+      <td><strong style="color:var(--brand-maroon);">${{r.impacto}}</strong></td>
+      <td style="font-size:0.71rem; color:#4A5568;">${{r.diag}}</td>
+    </tr>
+  `).join('');
+}}
+
+function renderDiagTableRegiones(ctx) {{
+  const tbody = document.getElementById('diagTableRegiones');
+  if (!tbody) return;
+
+  const regCur = {{}};
+  ctx.cur.forEach(r => {{
+    const reg = r.region || 'Otros';
+    regCur[reg] = (regCur[reg] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const regWoW = {{}};
+  ctx.prev1.forEach(r => {{
+    const reg = r.region || 'Otros';
+    regWoW[reg] = (regWoW[reg] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const regYoY = {{}};
+  ctx.ly.forEach(r => {{
+    const reg = r.region || 'Otros';
+    regYoY[reg] = (regYoY[reg] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const regiones = DATA.filtros.regiones || ['CDMX', 'Bajío', 'Monterrey', 'Los Cabos', 'Puebla', 'Otros'];
+  const rowsData = regiones.map(reg => {{
+    const cur = regCur[reg] || 0;
+    const wow = regWoW[reg] || 0;
+    const yoy = regYoY[reg] || 0;
+    const wowPct = wow > 0 ? ((cur - wow) / wow * 100) : null;
+    const yoyPct = yoy > 0 ? ((cur - yoy) / yoy * 100) : null;
+
+    let semCls = 'ok', semText = '✅ Estable', diag = 'Comportamiento territorial dentro de parámetros.';
+    if (wow > 30000 && wowPct < -40) {{
+      semCls = 'critico'; semText = '🔴 Contracción';
+      diag = `Caída del ${{Math.abs(wowPct).toFixed(1)}}% WoW (-${{fmtMiles(wow - cur)}}). Solicitar reporte de sell-out en la plaza.`;
+    }} else if (wow > 25000 && wowPct < -20) {{
+      semCls = 'alerta'; semText = '🟡 En Descenso';
+      diag = `Disminución de ${{Math.abs(wowPct).toFixed(1)}}% WoW. Monitorear reabastecimiento en cuentas locales.`;
+    }} else if (cur > 0 && wow === 0) {{
+      semCls = 'monitoreo'; semText = '🔵 Nueva Venta';
+      diag = 'Apertura de volumen sin facturación en la semana anterior.';
+    }} else if (cur === 0 && wow === 0) {{
+      semCls = 'monitoreo'; semText = '⚪ Sin Movimiento';
+      diag = 'Sin ventas en la semana actual ni en la anterior con los filtros seleccionados.';
+    }}
+
+    return `
+      <tr>
+        <td><strong>${{escHtml(reg)}}</strong></td>
+        <td>${{fmtCur(cur)}}</td>
+        <td>${{wow > 0 ? fmtCur(wow) : '—'}}</td>
+        <td class="${{wowPct !== null && wowPct < 0 ? 'neg-val' : ''}}"><strong>${{wowPct !== null ? (wowPct >= 0 ? '+' : '') + wowPct.toFixed(1) + '%' : 'N/D'}}</strong></td>
+        <td>${{yoy > 0 ? fmtCur(yoy) : '—'}}</td>
+        <td class="${{yoyPct !== null && yoyPct < 0 ? 'neg-val' : ''}}">${{yoyPct !== null ? (yoyPct >= 0 ? '+' : '') + yoyPct.toFixed(1) + '%' : 'N/D'}}</td>
+        <td><span class="diag-pill ${{semCls}}">${{semText}}</span></td>
+        <td style="font-size:0.71rem; color:#4A5568;">${{diag}}</td>
+      </tr>
+    `;
+  }});
+
+  tbody.innerHTML = rowsData.join('');
+}}
+
+function renderDiagTableClientes(ctx) {{
+  const tbody = document.getElementById('diagTableClientes');
+  if (!tbody) return;
+
+  const records = ctx.cur;
+  const recsPrev = ctx.prev1.filter(r => r.cliente && r.cliente !== '—');
+  const cliPrev = {{}};
+  recsPrev.forEach(r => {{
+    cliPrev[r.cliente] = (cliPrev[r.cliente] || 0) + (r.venta_sin_iva || 0);
+  }});
+
+  const cliCur = {{}};
+  records.forEach(r => {{
+    if (r.cliente && r.cliente !== '—') {{
+      cliCur[r.cliente] = (cliCur[r.cliente] || 0) + (r.venta_sin_iva || 0);
+    }}
+  }});
+
+  // Unir todas las cuentas relevantes
+  const allClients = new Set([...Object.keys(cliPrev), ...Object.keys(cliCur)]);
+  const clientRows = [];
+  allClients.forEach(cl => {{
+    const cur = cliCur[cl] || 0;
+    const prev = cliPrev[cl] || 0;
+    if (cur > 0 || prev > 25000) {{
+      const varPct = prev > 0 ? ((cur - prev) / prev * 100) : (cur > 0 ? 100 : 0);
+      let condCls = 'ok', condText = 'Compra Regular', pausa = '—', rec = 'Mantener atención habitual de cuenta.';
+      if (prev > 30000 && cur === 0) {{
+        condCls = 'alerta'; condText = '🟡 Inactiva en Semana';
+        pausa = fmtCur(prev);
+        rec = 'Comprador sin colocar orden semanal. Validar inventario en tienda y confirmar fecha de resurtido.';
+      }} else if (varPct < -50 && prev > 35000) {{
+        condCls = 'alerta'; condText = '🟡 Desaceleración';
+        pausa = fmtCur(prev - cur);
+        rec = `Pedido menor en ${{Math.abs(varPct).toFixed(1)}}%. Programar visita comercial de seguimiento.`;
+      }} else if (cur > 0 && prev === 0) {{
+        condCls = 'monitoreo'; condText = '🔵 Nuevo Pedido';
+        pausa = '—';
+        rec = 'Orden captada sin compra en semana previa.';
+      }} else if (varPct >= 0) {{
+        condCls = 'ok'; condText = '✅ Crecimiento';
+        pausa = '—';
+        rec = `Tracción positiva de la cuenta (+${{varPct.toFixed(1)}}%).`;
+      }}
+      clientRows.push({{ cl, cur, prev, varPct, condCls, condText, pausa, rec, isPaused: condCls === 'alerta' ? 2 : 1 }});
+    }}
+  }});
+
+  clientRows.sort((a, b) => b.isPaused - a.isPaused || b.prev - a.prev);
+
+  tbody.innerHTML = clientRows.slice(0, 15).map(r => `
+    <tr>
+      <td><strong>${{escHtml(r.cl)}}</strong></td>
+      <td>${{fmtCur(r.cur)}}</td>
+      <td>${{r.prev > 0 ? fmtCur(r.prev) : '—'}}</td>
+      <td class="${{r.varPct < 0 ? 'neg-val' : ''}}"><strong>${{r.prev > 0 ? (r.varPct >= 0 ? '+' : '') + r.varPct.toFixed(1) + '%' : '—'}}</strong></td>
+      <td><span class="diag-pill ${{r.condCls}}">${{r.condText}}</span></td>
+      <td><strong style="color:var(--brand-maroon);">${{r.pausa}}</strong></td>
+      <td style="font-size:0.71rem; color:#4A5568;">${{r.rec}}</td>
+    </tr>
+  `).join('');
 }}
 
 // ── Oportunidades y Riesgos ───────────────────────────────────────────────

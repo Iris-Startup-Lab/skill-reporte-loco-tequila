@@ -324,3 +324,52 @@ reaparece. Sin errores de consola en ningún estado.
     - En `computeComparativo8('region')` de JS, se pre-agrega el Plan por región (`p.r`), se calculan las variaciones vs Plan ($ y %) y vs Año Anterior ($ y %), y el total cuadra al centavo con Producto y Canal.
     - Se actualizó el HTML para llamar a la tabla `"Por Región"` (`card-comp8-region`), la cabecera de la 4ta columna como `"Categoría"` (idéntica a las otras dos tablas) y se retiró el `max-height: 480px` para que se visualice completa y uniforme (`max-height: none`).
 
+## Actualización — Reordenamiento de KPI Cards, Eliminación de Registros, Tarjeta 10 y Módulo de Diagnóstico Ejecutivo
+
+**Reporte del usuario**:
+1. Reordenar las tarjetas de KPI superiores en el Dashboard HTML con la siguiente jerarquía estricta:
+   1. Ventas Totales — YTD Ventas acumuladas
+   2. Ventas Netas
+   3. YTD vs año anterior
+   4. Plan est. ($)
+   5. WOW — vs semana anterior
+   6. YOY — vs misma semana ant
+   7. Cajas
+   8. Margen
+   9. Ticket Promedio
+2. Eliminar la tarjeta "Registros" (no aporta valor directivo y satura el espacio).
+3. Agregar una tarjeta extra del "KPI a poner atención", que tras un análisis analítico del estado actual muestre la métrica crítica que requiere acción inmediata.
+4. Agregar una sección nueva al dashboard con un diagnóstico de los KPIs y dimensiones que requieren atención (bajadas en regiones clave, productos que dejaron de venderse bruscamente / frenazo súbito, valores rezagados vs Plan comercial, clientes inactivos y márgenes).
+
+**Solución Implementada**:
+- **Reordenamiento de Tarjetas (`scripts/dashboard_generator.py`)**:
+  En `renderKPIsDynamic()` se reordenaron las tarjetas para cumplir con el orden 1 al 9 solicitado. La tarjeta "Registros" fue retirada de forma definitiva.
+- **Tarjeta 10 ("KPI a Poner Atención")**:
+  Se implementó un motor de criticidad ponderada que evalúa en tiempo real:
+  - Brecha vs Plan (`vsPlanPct < -5%`, con alerta crítica si `< -25%`).
+  - Caída WoW (`wowPct < -10%`, con alerta crítica si `< -30%`).
+  - Caída YoY (`yoyPct < -10%`, con alerta crítica si `< -25%`).
+  - Rezago YTD vs año anterior (`ytdPct < -5%`).
+  - Caída o erosión de Margen por debajo del umbral objetivo del 65% (`margenPct < 65%`, crítico si `< 55%`).
+  - Renderizado con estilos distintivos (`.kpi-card.kpi-focus`), gradientes suaves y micro-badges de severidad (`🔴 Desvío Crítico`, `🟡 En Alerta` o `✅ Estable`).
+- **Pestaña Principal Completa: "Diagnóstico Ejecutivo" (`#tab-diagnostico`)**:
+  - A solicitud del usuario para dotar de máxima profundidad analítica al dashboard, el módulo de diagnóstico se transformó en una **ventana principal independiente** al mismo nivel que "Dashboard General" y "Comparativo 8 Columnas", accesible desde la barra superior (`tab-nav`).
+  - Cuenta con su propia barra de subtabs para navegación rápida: `⚠️ Alertas Principales`, `🎯 Plan vs Real`, `📦 Productos y Frenazos`, `🗺️ Regiones y Territorio`, `👥 Clientes Clave`.
+  - Mantiene las 10 KPI Cards superiores (`#kpiGrid_diagnostico`) sincronizadas con los filtros.
+  - Integra 4 tablas analíticas completas:
+    1. **Plan vs Real por Canal (`#diagTablePlan`)**: Cuota, venta real, brecha, cumplimiento % y semáforo.
+    2. **Productos y Frenazos Súbitos (`#diagTableProductos`)**: Rotación, comparación vs promedio reciente, detección de drop-off y causas probables.
+    3. **Desempeño Territorial (`#diagTableRegiones`)**: Ventas por plaza/región, comparativos WoW y YoY y semáforos.
+    4. **Cuentas y Clientes Clave (`#diagTableClientes`)**: Monitoreo de inactividad semanal y volumen en pausa.
+  - Cada componente responde en tiempo real a los filtros del panel lateral.
+
+
+
+### Auditoría y correcciones del Diagnóstico Ejecutivo (Claude, oct-2026)
+- **Plan vs Real por Canal**: sumaba `p.p` (nombre del producto) en lugar de `p.v` (monto), así que todos los canales salían "Sin plan". Ya lee `p.v`.
+- **Periodo analizado**: el diagnóstico usa siempre **una semana** (la del filtro, o la semana base si está en "Todas"). Antes comparaba todo el histórico filtrado contra una sola semana (+16,000%).
+- **Filtros en la base de comparación**: la semana anterior, el promedio de 2 semanas y la misma semana del año anterior reciben los mismos filtros de Producto/Canal/Estado/Cliente/Comparables (`getDiagContext()`). El plan respeta Producto/Canal y no aplica con filtro de Cliente o "No comparables" (mismo criterio que el Comparativo 8).
+- **Sin datos**: las 4 tablas se limpian y muestran "Sin datos para los filtros seleccionados".
+- **Margen**: los umbrales se alinearon con la tarjeta 10 (alerta < 65%, crítico < 55%). La "Caída Brusca" de productos usa el mismo umbral de relevancia ($20k) que la alerta.
+- Los nombres de cliente/producto/región se escapan antes de insertarlos en el HTML (`escHtml`).
+- `empaquetar_skill.ps1` excluye cualquier archivo o carpeta con `to_delete` en el nombre.
